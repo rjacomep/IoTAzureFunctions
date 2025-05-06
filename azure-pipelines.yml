@@ -25,10 +25,9 @@ steps:
   displayName: 'Publish and Zip .NET 8.0 Isolated Function'
 
 - task: AzureFunctionApp@2
-  displayName: 'Deploy .NET Isolated Azure Function'
   inputs:
-    azureSubscription: $(azureSubscription)
-    appType: functionApp
-    appName: $(functionAppName)
-    package: $(zipPath)
-    runtimeStack: 'DOTNET-ISOLATED|8.0'  # This is crucial for isolated .NET 8.0 functions
+    connectedServiceNameARM: 'AzureConnection-AgentAssigned'
+    appType: 'functionApp'
+    isFlexConsumption: true
+    appName: 'TestAzureFunctions'
+    package: '$(System.DefaultWorkingDirectory)/**/*.zip'
