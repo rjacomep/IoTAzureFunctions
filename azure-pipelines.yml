@@ -7,7 +7,7 @@ pool:
   vmImage: 'windows-latest'
 
 variables:
-  azureSubscription: 'AzureConnection-AgentAssigned'  # Your service connection name
+  azureSubscription: 'AzureConnection-UAMI'  # Your service connection name
   functionAppName: 'iothubandroid'                   # Your Azure Function App name
   buildConfig: 'Release'
   outputDir: '$(Build.ArtifactStagingDirectory)/publish_output'
@@ -26,7 +26,7 @@ steps:
 
 - task: AzureFunctionApp@2
   inputs:
-    connectedServiceNameARM: 'AzureConnection-AgentAssigned'
+    connectedServiceNameARM: 'AzureConnection-UAMI'
     appType: 'functionApp'
     isFlexConsumption: true
     appName: '$(functionAppName)'
