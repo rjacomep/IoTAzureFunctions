@@ -29,5 +29,5 @@ steps:
     connectedServiceNameARM: 'AzureConnection-AgentAssigned'
     appType: 'functionApp'
     isFlexConsumption: true
-    appName: 'iothubandroid'
+    appName: '$(functionAppName)'
     package: '$(System.DefaultWorkingDirectory)/**/*.zip'
