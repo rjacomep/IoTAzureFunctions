@@ -30,4 +30,4 @@ steps:
     appType: 'functionApp'
     isFlexConsumption: true
     appName: '$(functionAppName)'
-    package: '$(System.DefaultWorkingDirectory)/**/*.zip'
+    package: '$(Build.ArtifactStagingDirectory)/app.zip'
