@@ -16,20 +16,42 @@ variables:
 
 steps:
 - task: UseDotNet@2
+  displayName: 'Check SDK .NET 8.0'
   inputs:
     packageType: 'sdk'
     version: '8.0.x'  # Asegura que se use el SDK .NET 8.0 para la compilación
 
 - task: DotNetCoreCLI@2
+  displayName: 'Complete Restore process'
   inputs:
     command: 'restore'
     projects: '**/*.csproj'
 
 - task: DotNetCoreCLI@2
+  displayName: 'Complete Build process'
   inputs:
     command: 'build'
     projects: '**/*.csproj'
     arguments: '--configuration $(buildConfig)'
+
+- task: DotNetCoreCLI@2
+  displayName: 'Complete Publish process'
+  inputs:
+    command: 'publish'
+    publishWebProjects: false
+    projects: '**/*.csproj'
+    arguments: '--configuration $(buildConfig) --output $(outputDir)'
+    zipAfterPublish: false
+    modifyOutputPath: false
+
+- task: ArchiveFiles@2
+  displayName: 'Archivar los archivos publicados en un archivo ZIP'
+  inputs:
+    rootFolderOrFile: '$(outputDir)'
+    includeRootFolder: false
+    archiveType: 'zip'
+    archiveFile: '$(zipPath)'
+    replaceExistingArchive: true
 
 - task: PowerShell@2
   displayName: 'Verificar contenido del archivo ZIP antes del despliegue'
@@ -50,24 +72,6 @@ steps:
           Write-Host "Archivo ZIP no encontrado en $zipPath"
           throw "El archivo ZIP para despliegue no existe."
       }
-
-- task: DotNetCoreCLI@2
-  inputs:
-    command: 'publish'
-    publishWebProjects: false
-    projects: '**/*.csproj'
-    arguments: '--configuration $(buildConfig) --output $(outputDir)'
-    zipAfterPublish: false
-    modifyOutputPath: false
-
-- task: ArchiveFiles@2
-  displayName: 'Archivar los archivos publicados en un archivo ZIP'
-  inputs:
-    rootFolderOrFile: '$(outputDir)'
-    includeRootFolder: false
-    archiveType: 'zip'
-    archiveFile: '$(zipPath)'
-    replaceExistingArchive: true
 
 - task: AzureCLI@2
   displayName: 'Listar y detener la Function App destino'
