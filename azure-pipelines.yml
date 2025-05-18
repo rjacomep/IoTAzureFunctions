@@ -31,47 +31,6 @@ steps:
     projects: '**/*.csproj'
     arguments: '--configuration $(buildConfig)'
 
-- task: DotNetCoreCLI@2
-  inputs:
-    command: 'publish'
-    publishWebProjects: false
-    projects: '**/*.csproj'
-    arguments: '--configuration $(buildConfig) --output $(outputDir)'
-    zipAfterPublish: false
-    modifyOutputPath: false
-
-- task: PowerShell@2
-  displayName: 'Verificar la estructura de carpetas después de la compilación'
-  inputs:
-    targetType: 'inline'
-    script: |
-      $buildOutputDir = "$(Build.ArtifactStagingDirectory)/publish_output"
-      Write-Host "Contenido del directorio de salida de la compilación:"
-      Get-ChildItem -Recurse -Path $buildOutputDir | ForEach-Object {
-          Write-Host $_.FullName
-      }
-
-      $functionDirs = Get-ChildItem -Path $buildOutputDir -Recurse | Where-Object { $_.PSIsContainer -eq $true -and ($_.Name -like "MyFunction*" -or $_.Name -like "HttpTrigger*") }
-      if ($functionDirs.Count -eq 0) {
-          Write-Host "No se encontraron carpetas de función."
-          throw "Faltan las carpetas de función necesarias."
-      }
-
-      $functionJsonFiles = Get-ChildItem -Path $buildOutputDir -Recurse | Where-Object { $_.Name -eq "function.json" }
-      if ($functionJsonFiles.Count -eq 0) {
-          Write-Host "No se encontraron archivos function.json."
-          throw "Faltan archivos function.json necesarios para las funciones."
-      }
-
-- task: ArchiveFiles@2
-  displayName: 'Archivar los archivos publicados en un archivo ZIP'
-  inputs:
-    rootFolderOrFile: '$(outputDir)'
-    includeRootFolder: false
-    archiveType: 'zip'
-    archiveFile: '$(zipPath)'
-    replaceExistingArchive: true
-
 - task: PowerShell@2
   displayName: 'Verificar contenido del archivo ZIP antes del despliegue'
   inputs:
@@ -92,6 +51,24 @@ steps:
           throw "El archivo ZIP para despliegue no existe."
       }
 
+- task: DotNetCoreCLI@2
+  inputs:
+    command: 'publish'
+    publishWebProjects: false
+    projects: '**/*.csproj'
+    arguments: '--configuration $(buildConfig) --output $(outputDir)'
+    zipAfterPublish: false
+    modifyOutputPath: false
+
+- task: ArchiveFiles@2
+  displayName: 'Archivar los archivos publicados en un archivo ZIP'
+  inputs:
+    rootFolderOrFile: '$(outputDir)'
+    includeRootFolder: false
+    archiveType: 'zip'
+    archiveFile: '$(zipPath)'
+    replaceExistingArchive: true
+
 - task: AzureCLI@2
   displayName: 'Listar y detener la Function App destino'
   inputs:
@@ -100,9 +77,13 @@ steps:
     scriptLocation: 'inlineScript'
     inlineScript: |
       Write-Host "Listando todas las Function Apps en el grupo de recursos"
-      az functionapp function list --name iothubandroid --resource-group iothost --output table
+      $functionApps = az functionapp function list --name iothubandroid --resource-group iothost --output table
+      Write-Host "Imprimiendo todas las Function Apps en el grupo de recursos"
+      Write-Host $functionApps
       Write-Host "Deteniendo la Function App objetivo: $(functionAppName)"
-      az functionapp stop --name $(functionAppName) --resource-group $(resourceGroup)
+      $stopOutput = az functionapp stop --name $(functionAppName) --resource-group $(resourceGroup)
+      Write-Host "Salida de detener Function App:"
+      Write-Host $stopOutput
 
 - task: AzureFunctionApp@2
   inputs:
@@ -121,4 +102,6 @@ steps:
     scriptLocation: 'inlineScript'
     inlineScript: |
       Write-Host "Iniciando la Function App objetivo: $(functionAppName)..."
-      az functionapp start --name $(functionAppName) --resource-group $(resourceGroup)
+      $startOutput = az functionapp start --name $(functionAppName) --resource-group $(resourceGroup)
+      Write-Host "Imprimiendo la Salida de iniciar Funtion App"
+      Write-Host $startOutput
