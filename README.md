@@ -14,7 +14,7 @@ Este comando crea una identidad administrada por el usuario (UAMI) en el grupo d
 az identity create --name uami-iothubandroid --resource-group iothost --location centralus
 ```
 
-**Salida esperada:**
+**Salida obtenida:**
 ```json
 {
   "clientId": "22a86721-c711-4b57-ba51-2e5470be6768",
@@ -42,7 +42,7 @@ Este comando asocia la identidad creada en el paso anterior a tu Azure Function 
 az functionapp identity assign --name iothubandroid --resource-group iothost --identities /subscriptions/ff9f0c6d-78a0-4af8-9fb1-ca98e7190b42/resourceGroups/iothost/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-iothubandroid
 ```
 
-**Salida esperada:**
+**Salida obtenida:**
 ```json
 {
   "principalId": "e3bd61de-1fd9-4aa3-a71b-d89aa112f854",
@@ -69,7 +69,7 @@ Este comando otorga el rol de "Contributor" a la UAMI sobre el alcance de la sus
 az role assignment create --assignee da304448-59a9-42b9-b1a1-4c3ea3db9446 --role Contributor --scope /subscriptions/ff9f0c6d-78a0-4af8-9fb1-ca98e7190b42
 ```
 
-**Salida esperada:**
+**Salida obtenida:**
 ```json
 {
   "condition": null,
