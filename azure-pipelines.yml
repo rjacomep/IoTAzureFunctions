@@ -9,6 +9,7 @@ pool:
 variables:
   azureSubscription: 'AzureConnection-UAMI'  # Your service connection name
   functionAppName: 'iothubandroid'                   # Your Azure Function App name
+  resourceGroup: 'iothost'                   # <--- Agrega el nombre de tu resource group aquí
   buildConfig: 'Release'
   outputDir: '$(Build.ArtifactStagingDirectory)/publish_output'
   zipPath: '$(Build.ArtifactStagingDirectory)/app.zip'
@@ -24,6 +25,15 @@ steps:
     powershell -Command "Compress-Archive -Path $(outputDir)\* -DestinationPath $(zipPath)"
   displayName: 'Publish and Zip .NET 8.0 Isolated Function'
 
+- task: AzureCLI@2
+  displayName: 'Stop Function App'
+  inputs:
+    azureSubscription: '$(azureSubscription)'
+    scriptType: 'ps'
+    scriptLocation: 'inlineScript'
+    inlineScript: |
+      az functionapp stop --name $(functionAppName) --resource-group $(resourceGroup)
+
 - task: AzureFunctionApp@2
   inputs:
     connectedServiceNameARM: 'AzureConnection-UAMI'
@@ -31,3 +41,12 @@ steps:
     isFlexConsumption: true
     appName: '$(functionAppName)'
     package: '$(Build.ArtifactStagingDirectory)/app.zip'
+
+- task: AzureCLI@2
+  displayName: 'Start Function App'
+  inputs:
+    azureSubscription: '$(azureSubscription)'
+    scriptType: 'ps'
+    scriptLocation: 'inlineScript'
+    inlineScript: |
+      az functionapp start --name $(functionAppName) --resource-group $(resourceGroup)
