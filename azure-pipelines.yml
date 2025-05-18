@@ -32,7 +32,8 @@ steps:
     scriptType: 'ps'
     scriptLocation: 'inlineScript'
     inlineScript: |
-      Write-Host "📋 Listando todas las Function Apps en el grupo de recursos: $(resourceGroup)..."
+      Write-Host "📋 Listando todas las Function Apps en el grupo de recursos"
+      az functionapp list --resource-group $(resourceGroup) --query "[].{name:name, state:state}" --output table
       $functionApps = az functionapp list --resource-group $(resourceGroup) --query "[].{name:name, state:state}" --output table
       Write-Host "$functionApps"
 
