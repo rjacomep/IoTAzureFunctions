@@ -26,13 +26,43 @@ steps:
   displayName: 'Publish and Zip .NET 8.0 Isolated Function'
 
 - task: AzureCLI@2
-  displayName: 'Stop Function App'
+  displayName: 'List and Stop Target Function App'
   inputs:
     azureSubscription: '$(azureSubscription)'
     scriptType: 'ps'
     scriptLocation: 'inlineScript'
     inlineScript: |
+      Write-Host "📋 Listando todas las Function Apps en el grupo de recursos: $(resourceGroup)..."
+      $functionApps = az functionapp list --resource-group $(resourceGroup) --query "[].{name:name, state:state}" --output table
+      Write-Host "$functionApps"
+
+      Write-Host "🛑 Deteniendo únicamente la Function App objetivo: $(functionAppName)..."
       az functionapp stop --name $(functionAppName) --resource-group $(resourceGroup)
+
+- task: PowerShell@2
+  displayName: '📦 Verificar contenido del archivo ZIP antes del despliegue'
+  inputs:
+    targetType: 'inline'
+    script: |
+      $zipPath = "$(Build.ArtifactStagingDirectory)/app.zip"
+      
+      if (Test-Path $zipPath) {
+          Write-Host "✅ Archivo ZIP encontrado: $zipPath"
+
+          # Tamaño del archivo
+          $sizeMB = [Math]::Round((Get-Item $zipPath).Length / 1MB, 2)
+          Write-Host "📏 Tamaño del ZIP: $sizeMB MB"
+
+          # Contenido del ZIP
+          Write-Host "📂 Contenido del archivo ZIP:"
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          [System.IO.Compression.ZipFile]::OpenRead($zipPath).Entries | ForEach-Object {
+              Write-Host " - $($_.FullName)"
+          }
+      } else {
+          Write-Host "❌ Archivo ZIP no encontrado en $zipPath"
+          throw "El archivo ZIP para despliegue no existe."
+      }
 
 - task: AzureFunctionApp@2
   inputs:
@@ -41,6 +71,7 @@ steps:
     isFlexConsumption: true
     appName: '$(functionAppName)'
     package: '$(Build.ArtifactStagingDirectory)/app.zip'
+    deploymentMethod: auto
 
 - task: AzureCLI@2
   displayName: 'Start Function App'
@@ -49,4 +80,9 @@ steps:
     scriptType: 'ps'
     scriptLocation: 'inlineScript'
     inlineScript: |
+      Write-Host "📋 Listando Function Apps actuales en el grupo de recursos: $(resourceGroup)..."
+      $functionApps = az functionapp list --resource-group $(resourceGroup) --query "[].{name:name, state:state}" --output table
+      Write-Host "$functionApps"
+
+      Write-Host "🚀 Iniciando únicamente la Function App objetivo: $(functionAppName)..."
       az functionapp start --name $(functionAppName) --resource-group $(resourceGroup)
