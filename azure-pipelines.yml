@@ -24,8 +24,9 @@ steps:
     command: 'publish'
     publishWebProjects: false
     projects: '**/*.csproj'
-    arguments: '--configuration $(buildConfig) --output $(outputDir)'
+    arguments: '--configuration $(buildConfig) --output $(outputDir) --no-build'
     zipAfterPublish: false
+    modifyOutputPath: false
 
 - task: ArchiveFiles@2
   inputs:
