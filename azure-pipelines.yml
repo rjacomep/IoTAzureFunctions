@@ -32,34 +32,34 @@ steps:
     scriptType: 'ps'
     scriptLocation: 'inlineScript'
     inlineScript: |
-      Write-Host "📋 Listando todas las Function Apps en el grupo de recursos"
+      Write-Host "Listando todas las Function Apps en el grupo de recursos"
       az functionapp function list --name iothubandroid --resource-group iothost --output table
 
-      Write-Host "🛑 Deteniendo únicamente la Function App objetivo: $(functionAppName)..."
+      Write-Host "Deteniendo únicamente la Function App objetivo: $(functionAppName)"
       az functionapp stop --name $(functionAppName) --resource-group $(resourceGroup)
 
 - task: PowerShell@2
-  displayName: '📦 Verificar contenido del archivo ZIP antes del despliegue'
+  displayName: 'Verificar contenido del archivo ZIP antes del despliegue'
   inputs:
     targetType: 'inline'
     script: |
       $zipPath = "$(Build.ArtifactStagingDirectory)/app.zip"
       
       if (Test-Path $zipPath) {
-          Write-Host "✅ Archivo ZIP encontrado: $zipPath"
+          Write-Host "Archivo ZIP encontrado: $zipPath"
 
           # Tamaño del archivo
           $sizeMB = [Math]::Round((Get-Item $zipPath).Length / 1MB, 2)
-          Write-Host "📏 Tamaño del ZIP: $sizeMB MB"
+          Write-Host "Tamaño del ZIP: $sizeMB MB"
 
           # Contenido del ZIP
-          Write-Host "📂 Contenido del archivo ZIP:"
+          Write-Host "Contenido del archivo ZIP:"
           Add-Type -AssemblyName System.IO.Compression.FileSystem
           [System.IO.Compression.ZipFile]::OpenRead($zipPath).Entries | ForEach-Object {
               Write-Host " - $($_.FullName)"
           }
       } else {
-          Write-Host "❌ Archivo ZIP no encontrado en $zipPath"
+          Write-Host "Archivo ZIP no encontrado en $zipPath"
           throw "El archivo ZIP para despliegue no existe."
       }
 
@@ -79,8 +79,8 @@ steps:
     scriptType: 'ps'
     scriptLocation: 'inlineScript'
     inlineScript: |
-      Write-Host "📋 Listando Function Apps actuales en el grupo de recursos: $(resourceGroup)..."
+      Write-Host "Listando Function Apps actuales en el grupo de recursos: $(resourceGroup)..."
       az functionapp function list --name iothubandroid --resource-group iothost --output table
 
-      Write-Host "🚀 Iniciando únicamente la Function App objetivo: $(functionAppName)..."
+      Write-Host "Iniciando únicamente la Function App objetivo: $(functionAppName)..."
       az functionapp start --name $(functionAppName) --resource-group $(resourceGroup)
