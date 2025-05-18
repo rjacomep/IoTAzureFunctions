@@ -93,7 +93,6 @@ steps:
   inputs:
     connectedServiceNameARM: '$(azureSubscription)'
     appType: 'functionApp'
-    isFlexConsumption: true
     appName: '$(functionAppName)'
     package: '$(Build.ArtifactStagingDirectory)/app.zip'
     deploymentMethod: auto
