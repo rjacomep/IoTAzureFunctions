@@ -7,9 +7,9 @@ pool:
   vmImage: 'windows-latest'
 
 variables:
-  azureSubscription: 'AzureConnection-UAMI'  # Your service connection name
-  functionAppName: 'iothubandroid'                   # Your Azure Function App name
-  resourceGroup: 'iothost'                   # <--- Agrega el nombre de tu resource group aquí
+  azureSubscription: 'AzureConnection-UAMI'  # Nombre de la conexión de servicio de Azure
+  functionAppName: 'iothubandroid'  # Nombre de tu Function App
+  resourceGroup: 'iothost'  # Grupo de recursos de tu Function App
   buildConfig: 'Release'
   outputDir: '$(Build.ArtifactStagingDirectory)/publish_output'
   zipPath: '$(Build.ArtifactStagingDirectory)/app.zip'
@@ -18,7 +18,7 @@ steps:
 - task: UseDotNet@2
   inputs:
     packageType: 'sdk'
-    version: '8.0.x'  # This ensures the .NET SDK 8.0 is used for your build
+    version: '8.0.x'  # Asegura que se use el SDK .NET 8.0 para la compilación
 
 - task: DotNetCoreCLI@2
   inputs:
@@ -31,51 +31,46 @@ steps:
     projects: '**/*.csproj'
     arguments: '--configuration $(buildConfig)'
 
+- task: DotNetCoreCLI@2
+  inputs:
+    command: 'publish'
+    publishWebProjects: false
+    projects: '**/*.csproj'
+    arguments: '--configuration $(buildConfig) --output $(outputDir)'
+    zipAfterPublish: false
+    modifyOutputPath: false
+
 - task: PowerShell@2
   displayName: 'Verificar la estructura de carpetas después de la compilación'
   inputs:
     targetType: 'inline'
     script: |
       $buildOutputDir = "$(Build.ArtifactStagingDirectory)/publish_output"
-
       Write-Host "Contenido del directorio de salida de la compilación:"
-      
-      # Listar la estructura de carpetas y archivos
       Get-ChildItem -Recurse -Path $buildOutputDir | ForEach-Object {
           Write-Host $_.FullName
       }
 
-      # Verificar si se generaron las carpetas de funciones
       $functionDirs = Get-ChildItem -Path $buildOutputDir -Recurse | Where-Object { $_.PSIsContainer -eq $true -and ($_.Name -like "MyFunction*" -or $_.Name -like "HttpTrigger*") }
       if ($functionDirs.Count -eq 0) {
-          Write-Host "No se encontraron carpetas de función (por ejemplo, MyFunction1/ o HttpTrigger1/)."
+          Write-Host "No se encontraron carpetas de función."
           throw "Faltan las carpetas de función necesarias."
       }
 
-      # Verificar si los archivos function.json existen
       $functionJsonFiles = Get-ChildItem -Path $buildOutputDir -Recurse | Where-Object { $_.Name -eq "function.json" }
       if ($functionJsonFiles.Count -eq 0) {
           Write-Host "No se encontraron archivos function.json."
           throw "Faltan archivos function.json necesarios para las funciones."
       }
 
-- task: DotNetCoreCLI@2
-  inputs:
-    command: 'publish'
-    publishWebProjects: false
-    projects: '**/*.csproj'
-    arguments: '--configuration $(buildConfig) --output $(outputDir) --no-build'
-    zipAfterPublish: false
-    modifyOutputPath: false
-
 - task: ArchiveFiles@2
+  displayName: 'Archivar los archivos publicados en un archivo ZIP'
   inputs:
     rootFolderOrFile: '$(outputDir)'
     includeRootFolder: false
     archiveType: 'zip'
     archiveFile: '$(zipPath)'
     replaceExistingArchive: true
-  displayName: 'Archive the Published Files into ZIP'
 
 - task: PowerShell@2
   displayName: 'Verificar contenido del archivo ZIP antes del despliegue'
@@ -83,15 +78,10 @@ steps:
     targetType: 'inline'
     script: |
       $zipPath = "$(Build.ArtifactStagingDirectory)/app.zip"
-      
       if (Test-Path $zipPath) {
           Write-Host "Archivo ZIP encontrado: $zipPath"
-
-          # Tamaño del archivo
           $sizeMB = [Math]::Round((Get-Item $zipPath).Length / 1MB, 2)
           Write-Host "Tamaño del ZIP: $sizeMB MB"
-
-          # Contenido del ZIP
           Write-Host "Contenido del archivo ZIP:"
           Add-Type -AssemblyName System.IO.Compression.FileSystem
           [System.IO.Compression.ZipFile]::OpenRead($zipPath).Entries | ForEach-Object {
@@ -103,7 +93,7 @@ steps:
       }
 
 - task: AzureCLI@2
-  displayName: 'List and Stop Target Function App'
+  displayName: 'Listar y detener la Function App destino'
   inputs:
     azureSubscription: '$(azureSubscription)'
     scriptType: 'ps'
@@ -111,13 +101,12 @@ steps:
     inlineScript: |
       Write-Host "Listando todas las Function Apps en el grupo de recursos"
       az functionapp function list --name iothubandroid --resource-group iothost --output table
-
-      Write-Host "Deteniendo únicamente la Function App objetivo: $(functionAppName)"
+      Write-Host "Deteniendo la Function App objetivo: $(functionAppName)"
       az functionapp stop --name $(functionAppName) --resource-group $(resourceGroup)
 
 - task: AzureFunctionApp@2
   inputs:
-    connectedServiceNameARM: 'AzureConnection-UAMI'
+    connectedServiceNameARM: '$(azureSubscription)'
     appType: 'functionApp'
     isFlexConsumption: true
     appName: '$(functionAppName)'
@@ -125,14 +114,11 @@ steps:
     deploymentMethod: auto
 
 - task: AzureCLI@2
-  displayName: 'Start Function App'
+  displayName: 'Iniciar la Function App'
   inputs:
     azureSubscription: '$(azureSubscription)'
     scriptType: 'ps'
     scriptLocation: 'inlineScript'
     inlineScript: |
-      Write-Host "Listando Function Apps actuales en el grupo de recursos: $(resourceGroup)..."
-      az functionapp function list --name iothubandroid --resource-group iothost --output table
-
-      Write-Host "Iniciando únicamente la Function App objetivo: $(functionAppName)..."
+      Write-Host "Iniciando la Function App objetivo: $(functionAppName)..."
       az functionapp start --name $(functionAppName) --resource-group $(resourceGroup)
