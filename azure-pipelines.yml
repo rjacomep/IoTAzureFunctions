@@ -19,24 +19,22 @@ steps:
   inputs:
     packageType: 'sdk'
     version: '8.0.x'  # This ensures the .NET SDK 8.0 is used for your build
-
-- script: |
-    dotnet publish --configuration $(buildConfig) --framework net8.0 --output $(outputDir)
-    powershell -Command "Compress-Archive -Path $(outputDir)\* -DestinationPath $(zipPath)"
-  displayName: 'Publish and Zip .NET 8.0 Isolated Function'
-
-- task: AzureCLI@2
-  displayName: 'List and Stop Target Function App'
+- task: DotNetCoreCLI@2
   inputs:
-    azureSubscription: '$(azureSubscription)'
-    scriptType: 'ps'
-    scriptLocation: 'inlineScript'
-    inlineScript: |
-      Write-Host "Listando todas las Function Apps en el grupo de recursos"
-      az functionapp function list --name iothubandroid --resource-group iothost --output table
+    command: 'publish'
+    publishWebProjects: false
+    projects: '**/*.csproj'
+    arguments: '--configuration $(buildConfig) --output $(outputDir)'
+    zipAfterPublish: false
 
-      Write-Host "Deteniendo únicamente la Function App objetivo: $(functionAppName)"
-      az functionapp stop --name $(functionAppName) --resource-group $(resourceGroup)
+- task: ArchiveFiles@2
+  inputs:
+    rootFolderOrFile: '$(outputDir)'
+    includeRootFolder: false
+    archiveType: 'zip'
+    archiveFile: '$(zipPath)'
+    replaceExistingArchive: true
+  displayName: 'Archive the Published Files into ZIP'
 
 - task: PowerShell@2
   displayName: 'Verificar contenido del archivo ZIP antes del despliegue'
@@ -62,6 +60,19 @@ steps:
           Write-Host "Archivo ZIP no encontrado en $zipPath"
           throw "El archivo ZIP para despliegue no existe."
       }
+
+- task: AzureCLI@2
+  displayName: 'List and Stop Target Function App'
+  inputs:
+    azureSubscription: '$(azureSubscription)'
+    scriptType: 'ps'
+    scriptLocation: 'inlineScript'
+    inlineScript: |
+      Write-Host "Listando todas las Function Apps en el grupo de recursos"
+      az functionapp function list --name iothubandroid --resource-group iothost --output table
+
+      Write-Host "Deteniendo únicamente la Function App objetivo: $(functionAppName)"
+      az functionapp stop --name $(functionAppName) --resource-group $(resourceGroup)
 
 - task: AzureFunctionApp@2
   inputs:
