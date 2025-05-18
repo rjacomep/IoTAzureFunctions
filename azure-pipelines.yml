@@ -19,6 +19,46 @@ steps:
   inputs:
     packageType: 'sdk'
     version: '8.0.x'  # This ensures the .NET SDK 8.0 is used for your build
+
+- task: DotNetCoreCLI@2
+  inputs:
+    command: 'restore'
+    projects: '**/*.csproj'
+
+- task: DotNetCoreCLI@2
+  inputs:
+    command: 'build'
+    projects: '**/*.csproj'
+    arguments: '--configuration $(buildConfig)'
+
+- task: PowerShell@2
+  displayName: 'Verificar la estructura de carpetas después de la compilación'
+  inputs:
+    targetType: 'inline'
+    script: |
+      $buildOutputDir = "$(Build.ArtifactStagingDirectory)/publish_output"
+
+      Write-Host "Contenido del directorio de salida de la compilación:"
+      
+      # Listar la estructura de carpetas y archivos
+      Get-ChildItem -Recurse -Path $buildOutputDir | ForEach-Object {
+          Write-Host $_.FullName
+      }
+
+      # Verificar si se generaron las carpetas de funciones
+      $functionDirs = Get-ChildItem -Path $buildOutputDir -Recurse | Where-Object { $_.PSIsContainer -eq $true -and ($_.Name -like "MyFunction*" -or $_.Name -like "HttpTrigger*") }
+      if ($functionDirs.Count -eq 0) {
+          Write-Host "No se encontraron carpetas de función (por ejemplo, MyFunction1/ o HttpTrigger1/)."
+          throw "Faltan las carpetas de función necesarias."
+      }
+
+      # Verificar si los archivos function.json existen
+      $functionJsonFiles = Get-ChildItem -Path $buildOutputDir -Recurse | Where-Object { $_.Name -eq "function.json" }
+      if ($functionJsonFiles.Count -eq 0) {
+          Write-Host "No se encontraron archivos function.json."
+          throw "Faltan archivos function.json necesarios para las funciones."
+      }
+
 - task: DotNetCoreCLI@2
   inputs:
     command: 'publish'
