@@ -10,3 +10,72 @@ Este proyecto implementa una integración segura y automatizada entre **GitHub**
 
 ```bash
 az identity create --name uami-iothubandroid --resource-group iothost --location centralus
+```
+
+**Salida esperada:**
+```json
+{
+  "clientId": "22a86721-c711-4b57-ba51-2e5470be6768",
+  "id": "/subscriptions/ff9f0c6d-78a0-4af8-9fb1-ca98e7190b42/resourcegroups/iothost/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-iothubandroid",
+  "location": "centralus",
+  "name": "uami-iothubandroid",
+  "principalId": "da304448-59a9-42b9-b1a1-4c3ea3db9446",
+  "resourceGroup": "iothost",
+  "systemData": null,
+  "tags": {},
+  "tenantId": "fd766edd-8bea-4c99-8672-56d1cabc2706",
+  "type": "Microsoft.ManagedIdentity/userAssignedIdentities"
+}
+```
+
+---
+
+#### 2. Asignar la UAMI a la Azure Function App
+
+```bash
+az functionapp identity assign --name iothubandroid --resource-group iothost --identities /subscriptions/ff9f0c6d-78a0-4af8-9fb1-ca98e7190b42/resourceGroups/iothost/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-iothubandroid
+```
+
+**Salida esperada:**
+```json
+{
+  "principalId": "e3bd61de-1fd9-4aa3-a71b-d89aa112f854",
+  "tenantId": "fd766edd-8bea-4c99-8672-56d1cabc2706",
+  "type": "SystemAssigned, UserAssigned",
+  "userAssignedIdentities": {
+    "/subscriptions/ff9f0c6d-78a0-4af8-9fb1-ca98e7190b42/resourcegroups/iothost/providers/Microsoft.ManagedIdentity/userAssignedIdentities/uami-iothubandroid": {
+      "clientId": "22a86721-c711-4b57-ba51-2e5470be6768",
+      "principalId": "da304448-59a9-42b9-b1a1-4c3ea3db9446"
+    }
+  }
+}
+```
+
+---
+
+#### 3. Asignar permisos a la UAMI en la suscripción
+
+```bash
+az role assignment create --assignee da304448-59a9-42b9-b1a1-4c3ea3db9446 --role Contributor --scope /subscriptions/ff9f0c6d-78a0-4af8-9fb1-ca98e7190b42
+```
+
+**Salida esperada:**
+```json
+{
+  "condition": null,
+  "conditionVersion": null,
+  "createdBy": null,
+  "createdOn": "2025-05-17T22:55:51.177367+00:00",
+  "delegatedManagedIdentityResourceId": null,
+  "description": null,
+  "id": "/subscriptions/ff9f0c6d-78a0-4af8-9fb1-ca98e7190b42/providers/Microsoft.Authorization/roleAssignments/3b8e6a3e-6f40-4e7c-a371-01118c038a2d",
+  "name": "3b8e6a3e-6f40-4e7c-a371-01118c038a2d",
+  "principalId": "da304448-59a9-42b9-b1a1-4c3ea3db9446",
+  "principalType": "ServicePrincipal",
+  "roleDefinitionId": "/subscriptions/ff9f0c6d-78a0-4af8-9fb1-ca98e7190b42/providers/Microsoft.Authorization/roleDefinitions/b24988ac-6180-42a0-ab88-20f7382dd24c",
+  "scope": "/subscriptions/ff9f0c6d-78a0-4af8-9fb1-ca98e7190b42",
+  "type": "Microsoft.Authorization/roleAssignments",
+  "updatedBy": "b8c48c71-2082-4287-a9e1-99adb438ec89",
+  "updatedOn": "2025-05-17T22:55:51.363372+00:00"
+}
+```
