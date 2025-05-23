@@ -53,21 +53,7 @@ steps:
     archiveFile: '$(zipPath)'
     replaceExistingArchive: true
 
-- task: PowerShell@2
-  displayName: 'Verificar contenido del archivo ZIP'
-  inputs:
-    targetType: 'inline'
-    script: |
-      $zipPath = "$(Build.ArtifactStagingDirectory)/app.zip"
-      if (Test-Path $zipPath) {
-          Write-Host "Archivo ZIP encontrado: $zipPath"
-          $sizeMB = [Math]::Round((Get-Item $zipPath).Length / 1MB, 2)
-          Write-Host "Tamaño del ZIP: $sizeMB MB"
-      } else {
-          throw "El archivo ZIP para despliegue no existe."
-      }
-
-# DESPLIEGUE SIMPLE Y EFECTIVO
+# DESPLIEGUE MÍNIMO - SIN CONFIGURACIONES EXTRA
 - task: AzureFunctionApp@2
   displayName: 'Deploy Azure Function App'
   inputs:
@@ -75,8 +61,3 @@ steps:
     appType: 'functionApp'
     appName: '$(functionAppName)'
     package: '$(zipPath)'
-    deploymentMethod: 'runFromPackage'  # Método más confiable
-    appSettings: |
-      -WEBSITE_RUN_FROM_PACKAGE 1
-      -SCM_DO_BUILD_DURING_DEPLOYMENT false
-      -ENABLE_ORYX_BUILD false
