@@ -61,3 +61,41 @@ steps:
     appType: 'functionApp'
     appName: '$(functionAppName)'
     package: '$(zipPath)'
+
+# DIAGNÓSTICO POST-DESPLIEGUE
+- task: AzureCLI@2
+  displayName: 'Diagnóstico Post-Despliegue'
+  inputs:
+    azureSubscription: '$(azureSubscription)'
+    scriptType: 'ps'
+    scriptLocation: 'inlineScript'
+    inlineScript: |
+      Write-Host "=== DIAGNÓSTICO POST-DESPLIEGUE ==="
+      
+      Write-Host "1. Estado de la Function App:"
+      az functionapp show --name $(functionAppName) --resource-group $(resourceGroup) --query "{name:name, state:state, defaultHostName:defaultHostName, kind:kind}" --output table
+      
+      Write-Host "`n2. Listando funciones desplegadas:"
+      $functions = az functionapp function list --name $(functionAppName) --resource-group $(resourceGroup) --output table
+      if ($functions) {
+          Write-Host $functions
+      } else {
+          Write-Host "No se encontraron funciones desplegadas"
+      }
+      
+      Write-Host "`n3. Configuración de runtime:"
+      az functionapp config show --name $(functionAppName) --resource-group $(resourceGroup) --query "{netFrameworkVersion:netFrameworkVersion, linuxFxVersion:linuxFxVersion, windowsFxVersion:windowsFxVersion}" --output table
+      
+      Write-Host "`n4. Variables de aplicación relevantes:"
+      $appSettings = az functionapp config appsettings list --name $(functionAppName) --resource-group $(resourceGroup) --query "[?name=='FUNCTIONS_EXTENSION_VERSION' || name=='FUNCTIONS_WORKER_RUNTIME' || name=='WEBSITE_RUN_FROM_PACKAGE'].{name:name, value:value}" --output table
+      Write-Host $appSettings
+      
+      Write-Host "`n5. Logs recientes de la aplicación:"
+      $logs = az functionapp log tail --name $(functionAppName) --resource-group $(resourceGroup) --timeout 30
+      if ($logs) {
+          Write-Host $logs
+      } else {
+          Write-Host "No se pudieron obtener logs recientes"
+      }
+      
+      Write-Host "`n=== FIN DIAGNÓSTICO ==="
