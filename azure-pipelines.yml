@@ -53,6 +53,44 @@ steps:
     archiveFile: '$(zipPath)'
     replaceExistingArchive: true
 
+# VERIFICACIÓN DETALLADA DEL ZIP
+- task: PowerShell@2
+  displayName: 'Verificar contenido detallado del ZIP'
+  inputs:
+    targetType: 'inline'
+    script: |
+      $zipPath = "$(Build.ArtifactStagingDirectory)/app.zip"
+      if (Test-Path $zipPath) {
+          Write-Host "=== VERIFICACIÓN DEL ZIP ==="
+          Write-Host "Archivo ZIP encontrado: $zipPath"
+          $sizeMB = [Math]::Round((Get-Item $zipPath).Length / 1MB, 2)
+          Write-Host "Tamaño del ZIP: $sizeMB MB"
+          
+          Write-Host "`nContenido completo del archivo ZIP:"
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
+          $zip.Entries | ForEach-Object {
+              $size = [Math]::Round($_.Length / 1KB, 2)
+              Write-Host " - $($_.FullName) ($size KB)"
+          }
+          $zip.Dispose()
+          
+          Write-Host "`nBuscando archivos críticos:"
+          $zip = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
+          $hostJson = $zip.Entries | Where-Object { $_.Name -eq "host.json" }
+          $dllFiles = $zip.Entries | Where-Object { $_.Name -like "*.dll" }
+          $funcJson = $zip.Entries | Where-Object { $_.Name -eq "function.json" }
+          
+          if ($hostJson) { Write-Host "✓ host.json encontrado" } else { Write-Host "✗ host.json NO encontrado" }
+          if ($dllFiles.Count -gt 0) { Write-Host "✓ $($dllFiles.Count) archivos .dll encontrados" } else { Write-Host "✗ No se encontraron archivos .dll" }
+          if ($funcJson) { Write-Host "✓ function.json encontrado" } else { Write-Host "✗ function.json NO encontrado" }
+          
+          $zip.Dispose()
+          Write-Host "=== FIN VERIFICACIÓN ZIP ==="
+      } else {
+          throw "El archivo ZIP para despliegue no existe."
+      }
+
 # DESPLIEGUE MÍNIMO - SIN CONFIGURACIONES EXTRA
 - task: AzureFunctionApp@2
   displayName: 'Deploy Azure Function App'
