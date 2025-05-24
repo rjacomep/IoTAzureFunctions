@@ -53,21 +53,45 @@ steps:
     archiveFile: '$(zipPath)'
     replaceExistingArchive: true
 
-# VERIFICACIÓN BÁSICA DEL ZIP (SIN DETALLES COMPLEJOS)
+# VERIFICACIÓN DETALLADA DEL ZIP
 - task: PowerShell@2
-  displayName: 'Verificar que existe el ZIP'
+  displayName: 'Verificar contenido detallado del ZIP'
   inputs:
     targetType: 'inline'
     script: |
       $zipPath = "$(Build.ArtifactStagingDirectory)/app.zip"
       if (Test-Path $zipPath) {
+          Write-Host "=== VERIFICACIÓN DEL ZIP ==="
+          Write-Host "Archivo ZIP encontrado: $zipPath"
           $sizeMB = [Math]::Round((Get-Item $zipPath).Length / 1MB, 2)
-          Write-Host "ZIP creado correctamente: $zipPath ($sizeMB MB)"
+          Write-Host "Tamaño del ZIP: $sizeMB MB"
+          
+          Write-Host "`nContenido completo del archivo ZIP:"
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
+          $zip.Entries | ForEach-Object {
+              $size = [Math]::Round($_.Length / 1KB, 2)
+              Write-Host " - $($_.FullName) ($size KB)"
+          }
+          $zip.Dispose()
+          
+          Write-Host "`nBuscando archivos críticos:"
+          $zip = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
+          $hostJson = $zip.Entries | Where-Object { $_.Name -eq "host.json" }
+          $dllFiles = $zip.Entries | Where-Object { $_.Name -like "*.dll" }
+          $funcJson = $zip.Entries | Where-Object { $_.Name -eq "function.json" }
+          
+          if ($hostJson) { Write-Host "✓ host.json encontrado" } else { Write-Host "✗ host.json NO encontrado" }
+          if ($dllFiles.Count -gt 0) { Write-Host "✓ $($dllFiles.Count) archivos .dll encontrados" } else { Write-Host "✗ No se encontraron archivos .dll" }
+          if ($funcJson) { Write-Host "✓ function.json encontrado" } else { Write-Host "✗ function.json NO encontrado" }
+          
+          $zip.Dispose()
+          Write-Host "=== FIN VERIFICACIÓN ZIP ==="
       } else {
-          throw "El archivo ZIP no existe"
+          throw "El archivo ZIP para despliegue no existe."
       }
 
-# DESPLIEGUE SIN CONFIGURACIONES ADICIONALES
+# DESPLIEGUE MÍNIMO - SIN CONFIGURACIONES EXTRA
 - task: AzureFunctionApp@2
   displayName: 'Deploy Azure Function App'
   inputs:
@@ -75,3 +99,49 @@ steps:
     appType: 'functionApp'
     appName: '$(functionAppName)'
     package: '$(zipPath)'
+
+# DIAGNÓSTICO POST-DESPLIEGUE (SIMPLIFICADO)
+- task: AzureCLI@2
+  displayName: 'Diagnóstico Post-Despliegue'
+  inputs:
+    azureSubscription: '$(azureSubscription)'
+    scriptType: 'ps'
+    scriptLocation: 'inlineScript'
+    inlineScript: |
+      try {
+          Write-Host "=== DIAGNÓSTICO POST-DESPLIEGUE ==="
+          
+          Write-Host "1. Estado de la Function App:"
+          $appInfo = az functionapp show --name $(functionAppName) --resource-group $(resourceGroup) --output json | ConvertFrom-Json
+          Write-Host "Nombre: $($appInfo.name)"
+          Write-Host "Estado: $($appInfo.state)"
+          Write-Host "URL: $($appInfo.defaultHostName)"
+          
+          Write-Host "`n2. Intentando listar funciones:"
+          $functionsResult = az functionapp function list --name $(functionAppName) --resource-group $(resourceGroup) --output json 2>&1
+          if ($LASTEXITCODE -eq 0) {
+              $functions = $functionsResult | ConvertFrom-Json
+              if ($functions -and $functions.Count -gt 0) {
+                  Write-Host "Funciones encontradas: $($functions.Count)"
+                  foreach ($func in $functions) {
+                      Write-Host "- $($func.name)"
+                  }
+              } else {
+                  Write-Host "No se encontraron funciones desplegadas"
+              }
+          } else {
+              Write-Host "Error al listar funciones: $functionsResult"
+          }
+          
+          Write-Host "`n3. Variables de aplicación clave:"
+          $settings = az functionapp config appsettings list --name $(functionAppName) --resource-group $(resourceGroup) --output json | ConvertFrom-Json
+          $keySettings = $settings | Where-Object { $_.name -in @('FUNCTIONS_EXTENSION_VERSION', 'FUNCTIONS_WORKER_RUNTIME', 'WEBSITE_RUN_FROM_PACKAGE') }
+          foreach ($setting in $keySettings) {
+              Write-Host "$($setting.name): $($setting.value)"
+          }
+          
+          Write-Host "`n=== FIN DIAGNÓSTICO ==="
+      }
+      catch {
+          Write-Host "Error en diagnóstico: $($_.Exception.Message)"
+      }
