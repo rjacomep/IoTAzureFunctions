@@ -19,6 +19,12 @@ steps:
     packageType: 'sdk'
     version: '8.0.x'
 
+# Instalar Azure Functions Core Tools (igual que tienes local)
+- task: FuncToolsInstaller@0
+  displayName: 'Install Azure Functions Core Tools'
+  inputs:
+    version: 'latest'
+
 - task: DotNetCoreCLI@2
   displayName: 'Restore packages'
   inputs:
@@ -32,49 +38,35 @@ steps:
     projects: '**/*.csproj'
     arguments: '--configuration $(buildConfig) --no-restore'
 
-# Publicar sin ZIP automático para tener control total
-- task: DotNetCoreCLI@2
-  displayName: 'Publish Azure Function'
-  inputs:
-    command: 'publish'
-    publishWebProjects: false
-    projects: '**/*.csproj'
-    arguments: '--configuration $(buildConfig) --output $(Build.ArtifactStagingDirectory)/output --no-build'
-    zipAfterPublish: false
-    modifyOutputPath: false
-
-# Verificar que host.json existe
+# Usar func tools para hacer el package (como haces localmente)
 - task: PowerShell@2
-  displayName: 'Verify project structure'
+  displayName: 'Package using Azure Functions Core Tools'
   inputs:
     targetType: 'inline'
     script: |
-      $outputPath = "$(Build.ArtifactStagingDirectory)/output"
-      Write-Host "=== Checking output directory structure ==="
-      Get-ChildItem -Path $outputPath -Recurse | ForEach-Object {
-          Write-Host $_.FullName
-      }
+      Write-Host "=== Building Azure Function package ==="
       
-      $hostJsonPath = Join-Path $outputPath "host.json"
-      if (-not (Test-Path $hostJsonPath)) {
-          Write-Host "##vso[task.logissue type=error]host.json not found at $hostJsonPath"
-          throw "host.json is required for Azure Functions"
+      # Navegar al directorio del proyecto (asumiendo que .csproj está en la raíz)
+      $projectPath = Get-ChildItem -Path "$(Build.SourcesDirectory)" -Filter "*.csproj" -Recurse | Select-Object -First 1
+      $projectDir = $projectPath.DirectoryName
+      
+      Write-Host "Project directory: $projectDir"
+      Set-Location $projectDir
+      
+      # Usar func tools para crear el package (igual que localmente)
+      Write-Host "Creating deployment package..."
+      func pack --build-native-deps --output "$(Build.ArtifactStagingDirectory)/function-app.zip"
+      
+      # Verificar que se creó el ZIP
+      $zipPath = "$(Build.ArtifactStagingDirectory)/function-app.zip"
+      if (Test-Path $zipPath) {
+          $sizeMB = [Math]::Round((Get-Item $zipPath).Length / 1MB, 2)
+          Write-Host "✓ Package created successfully: $sizeMB MB"
       } else {
-          Write-Host "✓ host.json found"
-          Get-Content $hostJsonPath | Write-Host
+          throw "Package creation failed"
       }
 
-# Crear ZIP manualmente
-- task: ArchiveFiles@2
-  displayName: 'Create deployment ZIP'
-  inputs:
-    rootFolderOrFile: '$(Build.ArtifactStagingDirectory)/output'
-    includeRootFolder: false
-    archiveType: 'zip'
-    archiveFile: '$(Build.ArtifactStagingDirectory)/function-app.zip'
-    replaceExistingArchive: true
-
-# Deploy usando Azure CLI para mejor control de errores
+# Deploy el ZIP generado por func tools
 - task: AzureCLI@2
   displayName: 'Deploy Function App'
   inputs:
@@ -83,23 +75,23 @@ steps:
     scriptLocation: 'inlineScript'
     inlineScript: |
       $zipPath = "$(Build.ArtifactStagingDirectory)/function-app.zip"
-      Write-Host "Deploying ZIP: $zipPath"
       
-      # Verificar que el ZIP existe
-      if (-not (Test-Path $zipPath)) {
-          throw "ZIP file not found: $zipPath"
-      }
+      Write-Host "Deploying Function App package..."
+      Write-Host "ZIP path: $zipPath"
       
-      Write-Host "ZIP file size: $([Math]::Round((Get-Item $zipPath).Length / 1MB, 2)) MB"
-      
-      # Deploy usando Azure CLI
+      # Deploy usando el mismo método que func tools usa internamente
       az functionapp deployment source config-zip `
           --resource-group $(resourceGroup) `
           --name $(functionAppName) `
           --src $zipPath `
-          --build-remote true `
+          --build-remote false `
           --timeout 600
-
+      
       # Verificar el estado
+      Write-Host "Checking deployment status..."
       $status = az functionapp show --name $(functionAppName) --resource-group $(resourceGroup) --query "state" -o tsv
-      Write-Host "Function App status after deployment: $status"
+      Write-Host "Function App status: $status"
+      
+      # Listar las funciones para verificar que se cargaron
+      Write-Host "Listing deployed functions..."
+      az functionapp function list --name $(functionAppName) --resource-group $(resourceGroup) --output table
