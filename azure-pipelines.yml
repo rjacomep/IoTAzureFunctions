@@ -11,54 +11,48 @@ variables:
   functionAppName: 'iothubandroid'
   resourceGroup: 'iothost'
   buildConfig: 'Release'
-  outputDir: '$(Build.ArtifactStagingDirectory)/publish_output'
-  zipPath: '$(Build.ArtifactStagingDirectory)/app.zip'
 
 steps:
 - task: UseDotNet@2
-  displayName: 'Check SDK .NET 8.0'
+  displayName: 'Install .NET 8.0 SDK'
   inputs:
     packageType: 'sdk'
     version: '8.0.x'
 
 - task: DotNetCoreCLI@2
-  displayName: 'Complete Restore process'
+  displayName: 'Restore packages'
   inputs:
     command: 'restore'
     projects: '**/*.csproj'
 
 - task: DotNetCoreCLI@2
-  displayName: 'Complete Build process'
+  displayName: 'Build project'
   inputs:
     command: 'build'
     projects: '**/*.csproj'
-    arguments: '--configuration $(buildConfig)'
+    arguments: '--configuration $(buildConfig) --no-restore'
 
+# Para plan Consumption: publicar directamente sin ZIP personalizado
 - task: DotNetCoreCLI@2
-  displayName: 'Complete Publish process'
+  displayName: 'Publish for Azure Functions'
   inputs:
     command: 'publish'
     publishWebProjects: false
     projects: '**/*.csproj'
-    arguments: '--configuration $(buildConfig) --output $(outputDir)'
-    zipAfterPublish: false
+    arguments: '--configuration $(buildConfig) --output $(Build.ArtifactStagingDirectory) --no-build'
+    zipAfterPublish: true
     modifyOutputPath: false
 
-- task: ArchiveFiles@2
-  displayName: 'Archivar los archivos publicados en un archivo ZIP'
-  inputs:
-    rootFolderOrFile: '$(outputDir)'
-    includeRootFolder: false
-    archiveType: 'zip'
-    archiveFile: '$(zipPath)'
-    replaceExistingArchive: true
-
+# Usar la tarea oficial para Consumption plan
 - task: AzureFunctionApp@2
-  retryCountOnTaskFailure: 3
-  displayName: 'Deploy Azure Function App'
+  displayName: 'Deploy to Azure Function App'
   inputs:
     connectedServiceNameARM: '$(azureSubscription)'
     appType: 'functionApp'
     appName: '$(functionAppName)'
-    package: '$(zipPath)'
-    deploymentMethod: 'zipDeploy'
+    package: '$(Build.ArtifactStagingDirectory)/**/*.zip'
+    deploymentMethod: 'auto'
+    # Configuraciones específicas para Consumption
+    appSettings: |
+      -FUNCTIONS_EXTENSION_VERSION ~4
+      -FUNCTIONS_WORKER_RUNTIME dotnet-isolated
