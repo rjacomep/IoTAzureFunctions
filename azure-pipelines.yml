@@ -32,115 +32,107 @@ steps:
     projects: '**/*.csproj'
     arguments: '--configuration $(buildConfig) --no-restore'
 
-# Método alternativo: usar dotnet publish con configuración específica para Functions
-- task: PowerShell@2
-  displayName: 'Create Function App package'
+# Publish optimizado para reducir tamaño
+- task: DotNetCoreCLI@2
+  displayName: 'Publish optimized'
   inputs:
-    errorActionPreference: 'stop'
-    failOnStderr: false
+    command: 'publish'
+    publishWebProjects: false
+    projects: '**/*.csproj'
+    arguments: '--configuration $(buildConfig) --output $(Build.ArtifactStagingDirectory)/function-output --no-build --self-contained false --verbosity minimal'
+    zipAfterPublish: false
+
+# Limpiar archivos innecesarios para reducir tamaño
+- task: PowerShell@2
+  displayName: 'Optimize deployment package'
+  inputs:
     targetType: 'inline'
     script: |
+      $outputPath = "$(Build.ArtifactStagingDirectory)/function-output"
+      
+      Write-Host "=== Optimizando paquete de deployment ==="
+      
+      # Eliminar archivos innecesarios que aumentan el tamaño
+      $filesToRemove = @(
+          "*.pdb",           # Símbolos de debug
+          "*.xml",           # Documentación XML
+          "*.dev.json",      # Archivos de desarrollo
+          "appsettings.Development.json"
+      )
+      
+      foreach ($pattern in $filesToRemove) {
+          $files = Get-ChildItem -Path $outputPath -Filter $pattern -Recurse
+          foreach ($file in $files) {
+              Write-Host "Eliminando: $($file.Name)"
+              Remove-Item $file.FullName -Force
+          }
+      }
+      
+      # Verificar tamaño final
+      $totalSize = (Get-ChildItem $outputPath -Recurse | Measure-Object -Property Length -Sum).Sum
+      $totalSizeMB = [Math]::Round($totalSize / 1MB, 2)
+      Write-Host "Tamaño optimizado: $totalSizeMB MB"
+
+# Limpiar Azure antes del deploy
+- task: AzureCLI@2
+  displayName: 'Prepare Azure for deployment'
+  inputs:
+    azureSubscription: '$(azureSubscription)'
+    scriptType: 'ps'
+    scriptLocation: 'inlineScript'
+    inlineScript: |
+      # Configurar para deployment limpio
+      az functionapp config appsettings set `
+          --name $(functionAppName) `
+          --resource-group $(resourceGroup) `
+          --settings WEBSITE_RUN_FROM_PACKAGE=0 `
+                    SCM_DO_BUILD_DURING_DEPLOYMENT=false
+
+# Deploy usando método alternativo más confiable
+- task: AzureCLI@2
+  displayName: 'Deploy via Azure CLI (more reliable)'
+  inputs:
+    azureSubscription: '$(azureSubscription)'
+    scriptType: 'ps'
+    scriptLocation: 'inlineScript'
+    inlineScript: |
       try {
-          Write-Host "=== Creating Azure Function package ==="
+          $outputPath = "$(Build.ArtifactStagingDirectory)/function-output"
           
-          # Encontrar el proyecto
-          $projectPath = Get-ChildItem -Path "$(Build.SourcesDirectory)" -Filter "*.csproj" -Recurse | Select-Object -First 1
-          if (-not $projectPath) {
-              throw "No se encontró archivo .csproj"
+          Write-Host "=== Iniciando deployment directo ==="
+          
+          # Deploy directo desde directorio (sin ZIP)
+          Write-Host "Desplegando directamente desde directorio..."
+          
+          # Comprimir solo para el deploy
+          $tempZip = "$(Agent.TempDirectory)/temp-deploy.zip"
+          Compress-Archive -Path "$outputPath/*" -DestinationPath $tempZip -Force
+          
+          $zipSize = [Math]::Round((Get-Item $tempZip).Length / 1MB, 2)
+          Write-Host "Tamaño del ZIP temporal: $zipSize MB"
+          
+          if ($zipSize -gt 250) {
+              throw "ZIP demasiado grande: $zipSize MB. Máximo recomendado: 250MB"
           }
           
-          $projectDir = $projectPath.DirectoryName
-          Write-Host "Directorio del proyecto: $projectDir"
-          
-          # Crear directorio de salida
-          $outputPath = "$(Build.ArtifactStagingDirectory)/function-output"
-          New-Item -ItemType Directory -Path $outputPath -Force
-          
-          # Publicar usando dotnet con configuraciones específicas para Azure Functions
-          Write-Host "Ejecutando dotnet publish..."
-          Set-Location $projectDir
-          
-          dotnet publish `
-              --configuration $(buildConfig) `
-              --output $outputPath `
-              --no-build `
-              --verbosity normal
+          # Deploy usando Azure CLI con timeout extendido
+          az functionapp deployment source config-zip `
+              --resource-group $(resourceGroup) `
+              --name $(functionAppName) `
+              --src $tempZip `
+              --timeout 1200
           
           if ($LASTEXITCODE -ne 0) {
-              throw "dotnet publish falló con código de salida: $LASTEXITCODE"
+              throw "Deploy falló con código: $LASTEXITCODE"
           }
           
-          Write-Host "✓ Publicación completada exitosamente"
+          Write-Host "✓ Deploy completado exitosamente"
           
-          # Verificar archivos críticos
-          $hostJsonPath = Join-Path $outputPath "host.json"
-          if (-not (Test-Path $hostJsonPath)) {
-              throw "host.json no encontrado en la salida"
-          }
-          
-          Write-Host "✓ host.json encontrado"
-          
-          # Listar contenido para debugging
-          Write-Host "=== Contenido del directorio de salida ==="
-          Get-ChildItem -Path $outputPath -Recurse | ForEach-Object {
-              Write-Host "  $($_.FullName.Replace($outputPath, ''))"
-          }
-          
-          # Crear ZIP
-          Write-Host "Creando archivo ZIP..."
-          $zipPath = "$(Build.ArtifactStagingDirectory)/function-app.zip"
-          
-          Compress-Archive -Path "$outputPath/*" -DestinationPath $zipPath -Force
-          
-          if (-not (Test-Path $zipPath)) {
-              throw "No se pudo crear el archivo ZIP"
-          }
-          
-          $sizeMB = [Math]::Round((Get-Item $zipPath).Length / 1MB, 2)
-          Write-Host "✓ ZIP creado exitosamente: $sizeMB MB"
-          
-          # Verificar contenido del ZIP
-          Write-Host "=== Contenido del ZIP ==="
-          Add-Type -AssemblyName System.IO.Compression.FileSystem
-          $zip = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
-          $zip.Entries | ForEach-Object {
-              Write-Host "  - $($_.FullName)"
-          }
-          $zip.Dispose()
-          
-          Write-Host "=== Proceso completado exitosamente ==="
-          exit 0
+          # Verificar funciones
+          Start-Sleep -Seconds 10
+          az functionapp function list --name $(functionAppName) --resource-group $(resourceGroup) --output table
           
       } catch {
           Write-Host "##vso[task.logissue type=error]Error: $($_.Exception.Message)"
-          Write-Host "##vso[task.logissue type=error]StackTrace: $($_.ScriptStackTrace)"
-          exit 1
+          throw
       }
-
-
-- task: PowerShell@2
-  displayName: 'Debug - List all files'
-  inputs:
-    targetType: 'inline'
-    script: |
-      Write-Host "=== Archivos en Build.SourcesDirectory ==="
-      Get-ChildItem "$(Build.SourcesDirectory)" -Recurse | Select-Object FullName, Length
-      
-      Write-Host "=== Archivos en ArtifactStagingDirectory ==="
-      Get-ChildItem "$(Build.ArtifactStagingDirectory)" -Recurse | Select-Object FullName, Length
-
-
-# Reemplazar solo el paso de deploy con esto:
-- task: AzureFunctionApp@2
-  displayName: 'Deploy using built-in task'
-  inputs:
-    connectedServiceNameARM: '$(azureSubscription)'
-    appType: 'functionApp'
-    appName: '$(functionAppName)'
-    package: '$(Build.ArtifactStagingDirectory)/function-output'
-    deploymentMethod: 'zipDeploy'
-    # Configuración específica para .NET 8 isolated
-    appSettings: |
-      -FUNCTIONS_EXTENSION_VERSION ~4
-      -FUNCTIONS_WORKER_RUNTIME dotnet-isolated
-      -WEBSITE_RUN_FROM_PACKAGE 0
