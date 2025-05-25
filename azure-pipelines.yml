@@ -32,27 +32,74 @@ steps:
     projects: '**/*.csproj'
     arguments: '--configuration $(buildConfig) --no-restore'
 
-# Para plan Consumption: publicar directamente sin ZIP personalizado
+# Publicar sin ZIP automático para tener control total
 - task: DotNetCoreCLI@2
-  displayName: 'Publish for Azure Functions'
+  displayName: 'Publish Azure Function'
   inputs:
     command: 'publish'
     publishWebProjects: false
     projects: '**/*.csproj'
-    arguments: '--configuration $(buildConfig) --output $(Build.ArtifactStagingDirectory) --no-build'
-    zipAfterPublish: true
+    arguments: '--configuration $(buildConfig) --output $(Build.ArtifactStagingDirectory)/output --no-build'
+    zipAfterPublish: false
     modifyOutputPath: false
 
-# Usar la tarea oficial para Consumption plan
-- task: AzureFunctionApp@2
-  displayName: 'Deploy to Azure Function App'
+# Verificar que host.json existe
+- task: PowerShell@2
+  displayName: 'Verify project structure'
   inputs:
-    connectedServiceNameARM: '$(azureSubscription)'
-    appType: 'functionApp'
-    appName: '$(functionAppName)'
-    package: '$(Build.ArtifactStagingDirectory)/**/*.zip'
-    deploymentMethod: 'auto'
-    # Configuraciones específicas para Consumption
-    appSettings: |
-      -FUNCTIONS_EXTENSION_VERSION ~4
-      -FUNCTIONS_WORKER_RUNTIME dotnet-isolated
+    targetType: 'inline'
+    script: |
+      $outputPath = "$(Build.ArtifactStagingDirectory)/output"
+      Write-Host "=== Checking output directory structure ==="
+      Get-ChildItem -Path $outputPath -Recurse | ForEach-Object {
+          Write-Host $_.FullName
+      }
+      
+      $hostJsonPath = Join-Path $outputPath "host.json"
+      if (-not (Test-Path $hostJsonPath)) {
+          Write-Host "##vso[task.logissue type=error]host.json not found at $hostJsonPath"
+          throw "host.json is required for Azure Functions"
+      } else {
+          Write-Host "✓ host.json found"
+          Get-Content $hostJsonPath | Write-Host
+      }
+
+# Crear ZIP manualmente
+- task: ArchiveFiles@2
+  displayName: 'Create deployment ZIP'
+  inputs:
+    rootFolderOrFile: '$(Build.ArtifactStagingDirectory)/output'
+    includeRootFolder: false
+    archiveType: 'zip'
+    archiveFile: '$(Build.ArtifactStagingDirectory)/function-app.zip'
+    replaceExistingArchive: true
+
+# Deploy usando Azure CLI para mejor control de errores
+- task: AzureCLI@2
+  displayName: 'Deploy Function App'
+  inputs:
+    azureSubscription: '$(azureSubscription)'
+    scriptType: 'ps'
+    scriptLocation: 'inlineScript'
+    inlineScript: |
+      $zipPath = "$(Build.ArtifactStagingDirectory)/function-app.zip"
+      Write-Host "Deploying ZIP: $zipPath"
+      
+      # Verificar que el ZIP existe
+      if (-not (Test-Path $zipPath)) {
+          throw "ZIP file not found: $zipPath"
+      }
+      
+      Write-Host "ZIP file size: $([Math]::Round((Get-Item $zipPath).Length / 1MB, 2)) MB"
+      
+      # Deploy usando Azure CLI
+      az functionapp deployment source config-zip `
+          --resource-group $(resourceGroup) `
+          --name $(functionAppName) `
+          --src $zipPath `
+          --build-remote true `
+          --timeout 600
+
+      # Verificar el estado
+      $status = az functionapp show --name $(functionAppName) --resource-group $(resourceGroup) --query "state" -o tsv
+      Write-Host "Function App status after deployment: $status"
