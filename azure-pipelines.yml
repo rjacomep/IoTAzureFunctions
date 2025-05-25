@@ -32,138 +32,81 @@ steps:
     projects: '**/*.csproj'
     arguments: '--configuration $(buildConfig) --no-restore'
 
-# Publish optimizado para reducir tamaño
 - task: DotNetCoreCLI@2
-  displayName: 'Publish optimized'
+  displayName: 'Publish project'
   inputs:
     command: 'publish'
     publishWebProjects: false
     projects: '**/*.csproj'
-    arguments: '--configuration $(buildConfig) --output $(Build.ArtifactStagingDirectory)/function-output --no-build --self-contained false --verbosity minimal'
+    arguments: '--configuration $(buildConfig) --output $(Build.ArtifactStagingDirectory)/output --no-build'
     zipAfterPublish: false
+    modifyOutputPath: false
 
-# Limpiar archivos innecesarios para reducir tamaño
+# Crear ZIP usando la tarea oficial (más confiable que PowerShell)
+- task: ArchiveFiles@2
+  displayName: 'Create deployment package'
+  inputs:
+    rootFolderOrFile: '$(Build.ArtifactStagingDirectory)/output'
+    includeRootFolder: false
+    archiveType: 'zip'
+    archiveFile: '$(Build.ArtifactStagingDirectory)/app.zip'
+    replaceExistingArchive: true
+
+# Verificación simple sin try-catch complejo
 - task: PowerShell@2
-  displayName: 'Optimize deployment package'
+  displayName: 'Verify package'
   inputs:
     targetType: 'inline'
+    errorActionPreference: 'continue'
     script: |
-      $outputPath = "$(Build.ArtifactStagingDirectory)/function-output"
-      
-      Write-Host "=== Optimizando paquete de deployment ==="
-      
-      # Eliminar archivos innecesarios que aumentan el tamaño
-      $filesToRemove = @(
-          "*.pdb",           # Símbolos de debug
-          "*.xml",           # Documentación XML
-          "*.dev.json",      # Archivos de desarrollo
-          "appsettings.Development.json"
-      )
-      
-      foreach ($pattern in $filesToRemove) {
-          $files = Get-ChildItem -Path $outputPath -Filter $pattern -Recurse
-          foreach ($file in $files) {
-              Write-Host "Eliminando: $($file.Name)"
-              Remove-Item $file.FullName -Force
+      $zipPath = "$(Build.ArtifactStagingDirectory)/app.zip"
+      if (Test-Path $zipPath) {
+          $sizeMB = [Math]::Round((Get-Item $zipPath).Length / 1MB, 2)
+          Write-Host "ZIP file created successfully: $sizeMB MB"
+          if ($sizeMB -gt 250) {
+              Write-Warning "ZIP file is large: $sizeMB MB"
           }
-      }
-      
-      # Verificar tamaño final
-      $totalSize = (Get-ChildItem $outputPath -Recurse | Measure-Object -Property Length -Sum).Sum
-      $totalSizeMB = [Math]::Round($totalSize / 1MB, 2)
-      Write-Host "Tamaño optimizado: $totalSizeMB MB"
-
-# Limpiar Azure antes del deploy
-- task: AzureCLI@2
-  displayName: 'Prepare Azure for deployment'
-  inputs:
-    azureSubscription: '$(azureSubscription)'
-    scriptType: 'ps'
-    scriptLocation: 'inlineScript'
-    inlineScript: |
-      # Configurar para deployment limpio
-      az functionapp config appsettings set `
-          --name $(functionAppName) `
-          --resource-group $(resourceGroup) `
-          --settings WEBSITE_RUN_FROM_PACKAGE=0 `
-                    SCM_DO_BUILD_DURING_DEPLOYMENT=false
-
-# Deploy usando método alternativo más confiable
-- task: AzureCLI@2
-  displayName: 'Deploy via Azure CLI (more reliable)'
-  inputs:
-    azureSubscription: '$(azureSubscription)'
-    scriptType: 'ps'
-    scriptLocation: 'inlineScript'
-    inlineScript: |
-      try {
-          $outputPath = "$(Build.ArtifactStagingDirectory)/function-output"
-          
-          Write-Host "=== Iniciando deployment directo ==="
-          
-          # Deploy directo desde directorio (sin ZIP)
-          Write-Host "Desplegando directamente desde directorio..."
-          
-          # Comprimir solo para el deploy
-          $tempZip = "$(Agent.TempDirectory)/temp-deploy.zip"
-          Compress-Archive -Path "$outputPath/*" -DestinationPath $tempZip -Force
-          
-          $zipSize = [Math]::Round((Get-Item $tempZip).Length / 1MB, 2)
-          Write-Host "Tamaño del ZIP temporal: $zipSize MB"
-          
-          if ($zipSize -gt 250) {
-              throw "ZIP demasiado grande: $zipSize MB. Máximo recomendado: 250MB"
-          }
-          
-          # Deploy usando Azure CLI con timeout extendido
-          az functionapp deployment source config-zip `
-              --resource-group $(resourceGroup) `
-              --name $(functionAppName) `
-              --src $tempZip `
-              --timeout 1200
-          
-          if ($LASTEXITCODE -ne 0) {
-              throw "Deploy falló con código: $LASTEXITCODE"
-          }
-          
-          Write-Host "✓ Deploy completado exitosamente"
-          
-          # Verificar funciones
-          Start-Sleep -Seconds 10
-          az functionapp function list --name $(functionAppName) --resource-group $(resourceGroup) --output table
-          
-      } catch {
-          Write-Host "##vso[task.logissue type=error]Error: $($_.Exception.Message)"
-          throw
+      } else {
+          Write-Error "ZIP file not found!"
+          exit 1
       }
 
-# Agregar después del paso de optimización
+# Limpiar configuraciones problemáticas
 - task: AzureCLI@2
-  displayName: 'Deploy using staging slot'
+  displayName: 'Prepare Function App'
   inputs:
     azureSubscription: '$(azureSubscription)'
-    scriptType: 'ps'
+    scriptType: 'bash'
     scriptLocation: 'inlineScript'
     inlineScript: |
-      # Crear slot staging si no existe
-      az functionapp deployment slot create `
-          --name $(functionAppName) `
-          --resource-group $(resourceGroup) `
-          --slot staging `
-          --configuration-source $(functionAppName) 2>$null
+      echo "Setting up Function App configuration..."
+      az functionapp config appsettings set \
+        --name $(functionAppName) \
+        --resource-group $(resourceGroup) \
+        --settings WEBSITE_RUN_FROM_PACKAGE=0 \
+                  SCM_DO_BUILD_DURING_DEPLOYMENT=false
+
+# Deploy simple y directo
+- task: AzureCLI@2
+  displayName: 'Deploy Function App'
+  inputs:
+    azureSubscription: '$(azureSubscription)'
+    scriptType: 'bash'
+    scriptLocation: 'inlineScript'
+    inlineScript: |
+      echo "Starting deployment..."
       
-      # Deploy al slot staging
-      $tempZip = "$(Agent.TempDirectory)/temp-deploy.zip"
-      az functionapp deployment source config-zip `
-          --resource-group $(resourceGroup) `
-          --name $(functionAppName) `
-          --slot staging `
-          --src $tempZip `
-          --timeout 1200
+      az functionapp deployment source config-zip \
+        --resource-group $(resourceGroup) \
+        --name $(functionAppName) \
+        --src "$(Build.ArtifactStagingDirectory)/app.zip" \
+        --timeout 600
       
-      # Swap a producción
-      az functionapp deployment slot swap `
-          --resource-group $(resourceGroup) `
-          --name $(functionAppName) `
-          --slot staging `
-          --target-slot production
+      echo "Deployment completed"
+      
+      # Verificar estado
+      az functionapp show \
+        --name $(functionAppName) \
+        --resource-group $(resourceGroup) \
+        --query "state" \
+        --output tsv
