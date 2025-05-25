@@ -39,74 +39,28 @@ steps:
     publishWebProjects: false
     projects: '**/*.csproj'
     arguments: '--configuration $(buildConfig) --output $(Build.ArtifactStagingDirectory)/output --no-build'
-    zipAfterPublish: false
+    zipAfterPublish: true
     modifyOutputPath: false
 
-# Crear ZIP usando la tarea oficial (más confiable que PowerShell)
-- task: ArchiveFiles@2
-  displayName: 'Create deployment package'
+# Usar la tarea oficial AzureFunctionApp@2 con configuración específica para .NET 8
+- task: AzureFunctionApp@2
+  displayName: 'Deploy Azure Function App v2'
   inputs:
-    rootFolderOrFile: '$(Build.ArtifactStagingDirectory)/output'
-    includeRootFolder: false
-    archiveType: 'zip'
-    archiveFile: '$(Build.ArtifactStagingDirectory)/app.zip'
-    replaceExistingArchive: true
-
-# Verificación simple sin try-catch complejo
-- task: PowerShell@2
-  displayName: 'Verify package'
-  inputs:
-    targetType: 'inline'
-    errorActionPreference: 'continue'
-    script: |
-      $zipPath = "$(Build.ArtifactStagingDirectory)/app.zip"
-      if (Test-Path $zipPath) {
-          $sizeMB = [Math]::Round((Get-Item $zipPath).Length / 1MB, 2)
-          Write-Host "ZIP file created successfully: $sizeMB MB"
-          if ($sizeMB -gt 250) {
-              Write-Warning "ZIP file is large: $sizeMB MB"
-          }
-      } else {
-          Write-Error "ZIP file not found!"
-          exit 1
-      }
-
-# Limpiar configuraciones problemáticas
-- task: AzureCLI@2
-  displayName: 'Prepare Function App'
-  inputs:
-    azureSubscription: '$(azureSubscription)'
-    scriptType: 'bash'
-    scriptLocation: 'inlineScript'
-    inlineScript: |
-      echo "Setting up Function App configuration..."
-      az functionapp config appsettings set \
-        --name $(functionAppName) \
-        --resource-group $(resourceGroup) \
-        --settings WEBSITE_RUN_FROM_PACKAGE=0 \
-                  SCM_DO_BUILD_DURING_DEPLOYMENT=false
-
-# Deploy simple y directo
-- task: AzureCLI@2
-  displayName: 'Deploy Function App'
-  inputs:
-    azureSubscription: '$(azureSubscription)'
-    scriptType: 'bash'
-    scriptLocation: 'inlineScript'
-    inlineScript: |
-      echo "Starting deployment..."
-      
-      az functionapp deployment source config-zip \
-        --resource-group $(resourceGroup) \
-        --name $(functionAppName) \
-        --src "$(Build.ArtifactStagingDirectory)/app.zip" \
-        --timeout 600
-      
-      echo "Deployment completed"
-      
-      # Verificar estado
-      az functionapp show \
-        --name $(functionAppName) \
-        --resource-group $(resourceGroup) \
-        --query "state" \
-        --output tsv
+    # Configuración básica
+    connectedServiceNameARM: '$(azureSubscription)'
+    appType: 'functionApp'  # Windows Function App
+    appName: '$(functionAppName)'
+    package: '$(Build.ArtifactStagingDirectory)/output/**/*.zip'
+    
+    # Configuración específica para .NET 8 isolated
+    runtimeStack: 'DOTNET-ISOLATED|8.0'  # Específico para .NET 8 isolated
+    
+    # Configuración de aplicación optimizada para .NET 8 isolated
+    appSettings: |
+      -FUNCTIONS_EXTENSION_VERSION ~4
+      -FUNCTIONS_WORKER_RUNTIME dotnet-isolated
+      -WEBSITE_RUN_FROM_PACKAGE 0
+      -SCM_DO_BUILD_DURING_DEPLOYMENT false
+    
+    # Método de deployment específico
+    deploymentMethod: 'zipDeploy'  # Explícitamente usar zipDeploy
