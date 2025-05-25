@@ -19,12 +19,6 @@ steps:
     packageType: 'sdk'
     version: '8.0.x'
 
-# Instalar Azure Functions Core Tools (igual que tienes local)
-- task: FuncToolsInstaller@0
-  displayName: 'Install Azure Functions Core Tools'
-  inputs:
-    version: 'latest'
-
 - task: DotNetCoreCLI@2
   displayName: 'Restore packages'
   inputs:
@@ -38,60 +32,147 @@ steps:
     projects: '**/*.csproj'
     arguments: '--configuration $(buildConfig) --no-restore'
 
-# Usar func tools para hacer el package (como haces localmente)
+# Método alternativo: usar dotnet publish con configuración específica para Functions
 - task: PowerShell@2
-  displayName: 'Package using Azure Functions Core Tools'
+  displayName: 'Create Function App package'
   inputs:
+    errorActionPreference: 'stop'
+    failOnStderr: false
     targetType: 'inline'
     script: |
-      Write-Host "=== Building Azure Function package ==="
-      
-      # Navegar al directorio del proyecto (asumiendo que .csproj está en la raíz)
-      $projectPath = Get-ChildItem -Path "$(Build.SourcesDirectory)" -Filter "*.csproj" -Recurse | Select-Object -First 1
-      $projectDir = $projectPath.DirectoryName
-      
-      Write-Host "Project directory: $projectDir"
-      Set-Location $projectDir
-      
-      # Usar func tools para crear el package (igual que localmente)
-      Write-Host "Creating deployment package..."
-      func pack --build-native-deps --output "$(Build.ArtifactStagingDirectory)/function-app.zip"
-      
-      # Verificar que se creó el ZIP
-      $zipPath = "$(Build.ArtifactStagingDirectory)/function-app.zip"
-      if (Test-Path $zipPath) {
+      try {
+          Write-Host "=== Creating Azure Function package ==="
+          
+          # Encontrar el proyecto
+          $projectPath = Get-ChildItem -Path "$(Build.SourcesDirectory)" -Filter "*.csproj" -Recurse | Select-Object -First 1
+          if (-not $projectPath) {
+              throw "No se encontró archivo .csproj"
+          }
+          
+          $projectDir = $projectPath.DirectoryName
+          Write-Host "Directorio del proyecto: $projectDir"
+          
+          # Crear directorio de salida
+          $outputPath = "$(Build.ArtifactStagingDirectory)/function-output"
+          New-Item -ItemType Directory -Path $outputPath -Force
+          
+          # Publicar usando dotnet con configuraciones específicas para Azure Functions
+          Write-Host "Ejecutando dotnet publish..."
+          Set-Location $projectDir
+          
+          dotnet publish `
+              --configuration $(buildConfig) `
+              --output $outputPath `
+              --no-build `
+              --verbosity normal
+          
+          if ($LASTEXITCODE -ne 0) {
+              throw "dotnet publish falló con código de salida: $LASTEXITCODE"
+          }
+          
+          Write-Host "✓ Publicación completada exitosamente"
+          
+          # Verificar archivos críticos
+          $hostJsonPath = Join-Path $outputPath "host.json"
+          if (-not (Test-Path $hostJsonPath)) {
+              throw "host.json no encontrado en la salida"
+          }
+          
+          Write-Host "✓ host.json encontrado"
+          
+          # Listar contenido para debugging
+          Write-Host "=== Contenido del directorio de salida ==="
+          Get-ChildItem -Path $outputPath -Recurse | ForEach-Object {
+              Write-Host "  $($_.FullName.Replace($outputPath, ''))"
+          }
+          
+          # Crear ZIP
+          Write-Host "Creando archivo ZIP..."
+          $zipPath = "$(Build.ArtifactStagingDirectory)/function-app.zip"
+          
+          Compress-Archive -Path "$outputPath/*" -DestinationPath $zipPath -Force
+          
+          if (-not (Test-Path $zipPath)) {
+              throw "No se pudo crear el archivo ZIP"
+          }
+          
           $sizeMB = [Math]::Round((Get-Item $zipPath).Length / 1MB, 2)
-          Write-Host "✓ Package created successfully: $sizeMB MB"
-      } else {
-          throw "Package creation failed"
+          Write-Host "✓ ZIP creado exitosamente: $sizeMB MB"
+          
+          # Verificar contenido del ZIP
+          Write-Host "=== Contenido del ZIP ==="
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $zip = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
+          $zip.Entries | ForEach-Object {
+              Write-Host "  - $($_.FullName)"
+          }
+          $zip.Dispose()
+          
+          Write-Host "=== Proceso completado exitosamente ==="
+          exit 0
+          
+      } catch {
+          Write-Host "##vso[task.logissue type=error]Error: $($_.Exception.Message)"
+          Write-Host "##vso[task.logissue type=error]StackTrace: $($_.ScriptStackTrace)"
+          exit 1
       }
 
-# Deploy el ZIP generado por func tools
 - task: AzureCLI@2
   displayName: 'Deploy Function App'
   inputs:
     azureSubscription: '$(azureSubscription)'
     scriptType: 'ps'
     scriptLocation: 'inlineScript'
+    failOnStandardError: false
     inlineScript: |
-      $zipPath = "$(Build.ArtifactStagingDirectory)/function-app.zip"
-      
-      Write-Host "Deploying Function App package..."
-      Write-Host "ZIP path: $zipPath"
-      
-      # Deploy usando el mismo método que func tools usa internamente
-      az functionapp deployment source config-zip `
-          --resource-group $(resourceGroup) `
-          --name $(functionAppName) `
-          --src $zipPath `
-          --build-remote false `
-          --timeout 600
-      
-      # Verificar el estado
-      Write-Host "Checking deployment status..."
-      $status = az functionapp show --name $(functionAppName) --resource-group $(resourceGroup) --query "state" -o tsv
-      Write-Host "Function App status: $status"
-      
-      # Listar las funciones para verificar que se cargaron
-      Write-Host "Listing deployed functions..."
-      az functionapp function list --name $(functionAppName) --resource-group $(resourceGroup) --output table
+      try {
+          $zipPath = "$(Build.ArtifactStagingDirectory)/function-app.zip"
+          
+          Write-Host "=== Iniciando despliegue ==="
+          Write-Host "Archivo ZIP: $zipPath"
+          
+          if (-not (Test-Path $zipPath)) {
+              throw "Archivo ZIP no encontrado: $zipPath"
+          }
+          
+          $sizeMB = [Math]::Round((Get-Item $zipPath).Length / 1MB, 2)
+          Write-Host "Tamaño del ZIP: $sizeMB MB"
+          
+          # Deploy usando Azure CLI
+          Write-Host "Ejecutando despliegue..."
+          az functionapp deployment source config-zip `
+              --resource-group $(resourceGroup) `
+              --name $(functionAppName) `
+              --src $zipPath `
+              --timeout 600
+          
+          if ($LASTEXITCODE -ne 0) {
+              throw "El despliegue falló con código de salida: $LASTEXITCODE"
+          }
+          
+          Write-Host "✓ Despliegue completado"
+          
+          # Verificar estado de la Function App
+          Write-Host "Verificando estado de la Function App..."
+          $status = az functionapp show --name $(functionAppName) --resource-group $(resourceGroup) --query "state" -o tsv
+          
+          if ($LASTEXITCODE -ne 0) {
+              Write-Host "##vso[task.logissue type=warning]No se pudo verificar el estado de la Function App"
+          } else {
+              Write-Host "Estado de la Function App: $status"
+          }
+          
+          # Listar funciones desplegadas
+          Write-Host "Listando funciones desplegadas..."
+          az functionapp function list --name $(functionAppName) --resource-group $(resourceGroup) --output table
+          
+          if ($LASTEXITCODE -ne 0) {
+              Write-Host "##vso[task.logissue type=warning]No se pudieron listar las funciones"
+          }
+          
+          Write-Host "=== Despliegue completado exitosamente ==="
+          
+      } catch {
+          Write-Host "##vso[task.logissue type=error]Error en el despliegue: $($_.Exception.Message)"
+          exit 1
+      }
