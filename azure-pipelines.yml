@@ -117,62 +117,30 @@ steps:
           exit 1
       }
 
-- task: AzureCLI@2
-  displayName: 'Deploy Function App'
+
+- task: PowerShell@2
+  displayName: 'Debug - List all files'
   inputs:
-    azureSubscription: '$(azureSubscription)'
-    scriptType: 'ps'
-    scriptLocation: 'inlineScript'
-    failOnStandardError: false
-    inlineScript: |
-      try {
-          $zipPath = "$(Build.ArtifactStagingDirectory)/function-app.zip"
-          
-          Write-Host "=== Iniciando despliegue ==="
-          Write-Host "Archivo ZIP: $zipPath"
-          
-          if (-not (Test-Path $zipPath)) {
-              throw "Archivo ZIP no encontrado: $zipPath"
-          }
-          
-          $sizeMB = [Math]::Round((Get-Item $zipPath).Length / 1MB, 2)
-          Write-Host "Tamaño del ZIP: $sizeMB MB"
-          
-          # Deploy usando Azure CLI
-          Write-Host "Ejecutando despliegue..."
-          az functionapp deployment source config-zip `
-              --resource-group $(resourceGroup) `
-              --name $(functionAppName) `
-              --src $zipPath `
-              --timeout 600
-          
-          if ($LASTEXITCODE -ne 0) {
-              throw "El despliegue falló con código de salida: $LASTEXITCODE"
-          }
-          
-          Write-Host "✓ Despliegue completado"
-          
-          # Verificar estado de la Function App
-          Write-Host "Verificando estado de la Function App..."
-          $status = az functionapp show --name $(functionAppName) --resource-group $(resourceGroup) --query "state" -o tsv
-          
-          if ($LASTEXITCODE -ne 0) {
-              Write-Host "##vso[task.logissue type=warning]No se pudo verificar el estado de la Function App"
-          } else {
-              Write-Host "Estado de la Function App: $status"
-          }
-          
-          # Listar funciones desplegadas
-          Write-Host "Listando funciones desplegadas..."
-          az functionapp function list --name $(functionAppName) --resource-group $(resourceGroup) --output table
-          
-          if ($LASTEXITCODE -ne 0) {
-              Write-Host "##vso[task.logissue type=warning]No se pudieron listar las funciones"
-          }
-          
-          Write-Host "=== Despliegue completado exitosamente ==="
-          
-      } catch {
-          Write-Host "##vso[task.logissue type=error]Error en el despliegue: $($_.Exception.Message)"
-          exit 1
-      }
+    targetType: 'inline'
+    script: |
+      Write-Host "=== Archivos en Build.SourcesDirectory ==="
+      Get-ChildItem "$(Build.SourcesDirectory)" -Recurse | Select-Object FullName, Length
+      
+      Write-Host "=== Archivos en ArtifactStagingDirectory ==="
+      Get-ChildItem "$(Build.ArtifactStagingDirectory)" -Recurse | Select-Object FullName, Length
+
+
+# Reemplazar solo el paso de deploy con esto:
+- task: AzureFunctionApp@2
+  displayName: 'Deploy using built-in task'
+  inputs:
+    connectedServiceNameARM: '$(azureSubscription)'
+    appType: 'functionApp'
+    appName: '$(functionAppName)'
+    package: '$(Build.ArtifactStagingDirectory)/function-output'
+    deploymentMethod: 'zipDeploy'
+    # Configuración específica para .NET 8 isolated
+    appSettings: |
+      -FUNCTIONS_EXTENSION_VERSION ~4
+      -FUNCTIONS_WORKER_RUNTIME dotnet-isolated
+      -WEBSITE_RUN_FROM_PACKAGE 0
