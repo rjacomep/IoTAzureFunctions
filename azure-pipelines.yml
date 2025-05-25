@@ -136,3 +136,34 @@ steps:
           Write-Host "##vso[task.logissue type=error]Error: $($_.Exception.Message)"
           throw
       }
+
+# Agregar después del paso de optimización
+- task: AzureCLI@2
+  displayName: 'Deploy using staging slot'
+  inputs:
+    azureSubscription: '$(azureSubscription)'
+    scriptType: 'ps'
+    scriptLocation: 'inlineScript'
+    inlineScript: |
+      # Crear slot staging si no existe
+      az functionapp deployment slot create `
+          --name $(functionAppName) `
+          --resource-group $(resourceGroup) `
+          --slot staging `
+          --configuration-source $(functionAppName) 2>$null
+      
+      # Deploy al slot staging
+      $tempZip = "$(Agent.TempDirectory)/temp-deploy.zip"
+      az functionapp deployment source config-zip `
+          --resource-group $(resourceGroup) `
+          --name $(functionAppName) `
+          --slot staging `
+          --src $tempZip `
+          --timeout 1200
+      
+      # Swap a producción
+      az functionapp deployment slot swap `
+          --resource-group $(resourceGroup) `
+          --name $(functionAppName) `
+          --slot staging `
+          --target-slot production
