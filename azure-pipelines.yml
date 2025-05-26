@@ -32,35 +32,40 @@ steps:
     projects: '**/*.csproj'
     arguments: '--configuration $(buildConfig) --no-restore'
 
+# Usar la estructura oficial según documentación [5]
 - task: DotNetCoreCLI@2
   displayName: 'Publish project'
   inputs:
     command: 'publish'
+    projects: '*.csproj'
     publishWebProjects: false
-    projects: '**/*.csproj'
-    arguments: '--configuration $(buildConfig) --output $(Build.ArtifactStagingDirectory)/publish --no-build'
-    zipAfterPublish: false
+    arguments: '--configuration $(buildConfig) --output publish_output'
     modifyOutputPath: false
+    zipAfterPublish: false
 
+# Crear archivo usando la estructura oficial [5]
 - task: ArchiveFiles@2
-  displayName: 'Create deployment ZIP'
+  displayName: 'Archive files'
   inputs:
-    rootFolderOrFile: '$(Build.ArtifactStagingDirectory)/publish'
+    rootFolderOrFile: '$(System.DefaultWorkingDirectory)/publish_output'
     includeRootFolder: false
-    archiveType: 'zip'
-    archiveFile: '$(Build.ArtifactStagingDirectory)/app.zip'
+    archiveFile: '$(System.DefaultWorkingDirectory)/build$(Build.BuildId).zip'
     replaceExistingArchive: true
 
+# Publicar como artefacto (paso crítico según documentación [5])
+- task: PublishBuildArtifacts@1
+  displayName: 'Publish build artifacts'
+  inputs:
+    PathtoPublish: '$(System.DefaultWorkingDirectory)/build$(Build.BuildId).zip'
+    artifactName: 'drop'
+
+# Deploy usando la configuración oficial [1][3]
 - task: AzureFunctionApp@2
   displayName: 'Deploy Azure Function App'
   inputs:
-    connectedServiceNameARM: '$(azureSubscription)'
+    connectedServiceNameARM: '$(azureSubscription)'  # Usar connectedServiceNameARM según [1]
     appType: 'functionApp'
     appName: '$(functionAppName)'
-    package: '$(Build.ArtifactStagingDirectory)/app.zip'
+    package: '$(System.DefaultWorkingDirectory)/build$(Build.BuildId).zip'  # Ruta específica
+    runtimeStack: 'DOTNET-ISOLATED|8.0'  # Específico para .NET 8 isolated según [3]
     deploymentMethod: 'zipDeploy'
-    appSettings: |
-      -FUNCTIONS_EXTENSION_VERSION "~4"
-      -FUNCTIONS_WORKER_RUNTIME "dotnet-isolated"
-      -WEBSITE_RUN_FROM_PACKAGE "0"
-      -SCM_DO_BUILD_DURING_DEPLOYMENT "false"
