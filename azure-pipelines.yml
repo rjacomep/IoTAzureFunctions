@@ -32,35 +32,37 @@ steps:
     projects: '**/*.csproj'
     arguments: '--configuration $(buildConfig) --no-restore'
 
+# Reemplazar el paso de publish con esto:
 - task: DotNetCoreCLI@2
-  displayName: 'Publish project'
+  displayName: 'Publish optimized for Functions'
   inputs:
     command: 'publish'
     publishWebProjects: false
     projects: '**/*.csproj'
-    arguments: '--configuration $(buildConfig) --output $(Build.ArtifactStagingDirectory)/output --no-build'
-    zipAfterPublish: true
+    arguments: '--configuration $(buildConfig) --output $(Build.ArtifactStagingDirectory)/output --no-build --self-contained false'
+    zipAfterPublish: false
     modifyOutputPath: false
 
-# Usar la tarea oficial AzureFunctionApp@2 con configuración específica para .NET 8
+# Crear ZIP manualmente con exclusiones
+- task: ArchiveFiles@2
+  displayName: 'Create optimized deployment package'
+  inputs:
+    rootFolderOrFile: '$(Build.ArtifactStagingDirectory)/output'
+    includeRootFolder: false
+    archiveType: 'zip'
+    archiveFile: '$(Build.ArtifactStagingDirectory)/function-app.zip'
+    replaceExistingArchive: true
+
 - task: AzureFunctionApp@2
   displayName: 'Deploy Azure Function App v2'
   inputs:
-    # Configuración básica
     connectedServiceNameARM: '$(azureSubscription)'
-    appType: 'functionApp'  # Windows Function App
+    appType: 'functionApp'
     appName: '$(functionAppName)'
-    package: '$(Build.ArtifactStagingDirectory)/output/**/*.zip'
-    
-    # Configuración específica para .NET 8 isolated
-    runtimeStack: 'DOTNET-ISOLATED|8.0'  # Específico para .NET 8 isolated
-    
-    # Configuración de aplicación optimizada para .NET 8 isolated
+    package: '$(Build.ArtifactStagingDirectory)/function-app.zip'
+    runtimeStack: 'DOTNET-ISOLATED|8.0'
     appSettings: |
       -FUNCTIONS_EXTENSION_VERSION ~4
       -FUNCTIONS_WORKER_RUNTIME dotnet-isolated
       -WEBSITE_RUN_FROM_PACKAGE 0
-      -SCM_DO_BUILD_DURING_DEPLOYMENT false
-    
-    # Método de deployment específico
-    deploymentMethod: 'zipDeploy'  # Explícitamente usar zipDeploy
+    deploymentMethod: 'zipDeploy'
