@@ -32,7 +32,6 @@ steps:
     projects: '**/*.csproj'
     arguments: '--configuration $(buildConfig) --no-restore'
 
-# Usar la estructura oficial según documentación [5]
 - task: DotNetCoreCLI@2
   displayName: 'Publish project'
   inputs:
@@ -43,7 +42,6 @@ steps:
     modifyOutputPath: false
     zipAfterPublish: false
 
-# Crear archivo usando la estructura oficial [5]
 - task: ArchiveFiles@2
   displayName: 'Archive files'
   inputs:
@@ -52,20 +50,73 @@ steps:
     archiveFile: '$(System.DefaultWorkingDirectory)/build$(Build.BuildId).zip'
     replaceExistingArchive: true
 
-# Publicar como artefacto (paso crítico según documentación [5])
+# Verificar contenido antes del deploy
+- task: PowerShell@2
+  displayName: 'Verify package contents'
+  inputs:
+    targetType: 'inline'
+    script: |
+      $zipPath = "$(System.DefaultWorkingDirectory)/build$(Build.BuildId).zip"
+      Add-Type -AssemblyName System.IO.Compression.FileSystem
+      $zip = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
+      
+      Write-Host "=== Contenido del ZIP ==="
+      $zip.Entries | ForEach-Object {
+          Write-Host "  - $($_.FullName)"
+      }
+      
+      # Verificar archivos críticos
+      $hostJson = $zip.Entries | Where-Object { $_.FullName -eq "host.json" }
+      if ($hostJson) {
+          Write-Host "✓ host.json encontrado"
+      } else {
+          Write-Host "❌ host.json NO encontrado - CRÍTICO"
+      }
+      
+      $zip.Dispose()
+
 - task: PublishBuildArtifacts@1
   displayName: 'Publish build artifacts'
   inputs:
     PathtoPublish: '$(System.DefaultWorkingDirectory)/build$(Build.BuildId).zip'
     artifactName: 'drop'
 
-# Deploy usando la configuración oficial [1][3]
 - task: AzureFunctionApp@2
   displayName: 'Deploy Azure Function App'
   inputs:
-    connectedServiceNameARM: '$(azureSubscription)'  # Usar connectedServiceNameARM según [1]
+    connectedServiceNameARM: '$(azureSubscription)'
     appType: 'functionApp'
     appName: '$(functionAppName)'
-    package: '$(System.DefaultWorkingDirectory)/build$(Build.BuildId).zip'  # Ruta específica
-    runtimeStack: 'DOTNET-ISOLATED|8.0'  # Específico para .NET 8 isolated según [3]
+    package: '$(System.DefaultWorkingDirectory)/build$(Build.BuildId).zip'
     deploymentMethod: 'zipDeploy'
+
+# Post-deployment: Reiniciar y sincronizar
+- task: AzureCLI@2
+  displayName: 'Post-deployment: Restart and sync'
+  inputs:
+    azureSubscription: '$(azureSubscription)'
+    scriptType: 'ps'
+    scriptLocation: 'inlineScript'
+    inlineScript: |
+      Write-Host "=== Post-deployment verification ==="
+      
+      # Reiniciar Function App
+      Write-Host "Reiniciando Function App..."
+      az functionapp restart --name $(functionAppName) --resource-group $(resourceGroup)
+      
+      # Esperar estabilización
+      Write-Host "Esperando estabilización..."
+      Start-Sleep -Seconds 45
+      
+      # Sincronizar triggers
+      Write-Host "Sincronizando triggers..."
+      az functionapp deployment source sync --name $(functionAppName) --resource-group $(resourceGroup)
+      
+      # Verificar funciones
+      Write-Host "Verificando funciones desplegadas..."
+      $functions = az functionapp function list --name $(functionAppName) --resource-group $(resourceGroup) --output table
+      Write-Host $functions
+      
+      # Verificar estado del runtime
+      $hostStatus = az functionapp show --name $(functionAppName) --resource-group $(resourceGroup) --query "hostingEnvironmentProfile" -o tsv
+      Write-Host "Estado del hosting: $hostStatus"
