@@ -59,10 +59,12 @@ steps:
     connectedServiceNameARM: '$(azureSubscription)'
     appType: 'functionApp'
     appName: '$(functionAppName)'
-    package: '$(Build.ArtifactStagingDirectory)/function-app.zip'
+    package: '$(Build.ArtifactStagingDirectory)/output/**/*.zip'
     runtimeStack: 'DOTNET-ISOLATED|8.0'
-    appSettings: |
-      -FUNCTIONS_EXTENSION_VERSION ~4
-      -FUNCTIONS_WORKER_RUNTIME dotnet-isolated
-      -WEBSITE_RUN_FROM_PACKAGE 0
     deploymentMethod: 'zipDeploy'
+    # Formato corregido con comillas dobles en todos los valores
+    appSettings: |
+      -FUNCTIONS_EXTENSION_VERSION "~4"
+      -FUNCTIONS_WORKER_RUNTIME "dotnet-isolated"
+      -WEBSITE_RUN_FROM_PACKAGE "0"
+      -SCM_DO_BUILD_DURING_DEPLOYMENT "false"
