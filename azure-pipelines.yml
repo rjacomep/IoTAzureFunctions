@@ -19,6 +19,23 @@ steps:
     packageType: 'sdk'
     version: '8.0.x'
 
+# Limpieza inicial según [1]
+- task: PowerShell@2
+  displayName: 'Initial cleanup (.NET 8 migration fix)'
+  inputs:
+    targetType: 'inline'
+    script: |
+      Write-Host "Limpieza inicial para migración .NET 8..."
+      # Eliminar completamente bin y obj para evitar referencias a .NET 6
+      if (Test-Path "bin") { 
+          Write-Host "Eliminando carpeta bin..."
+          Remove-Item "bin" -Recurse -Force 
+      }
+      if (Test-Path "obj") { 
+          Write-Host "Eliminando carpeta obj..."
+          Remove-Item "obj" -Recurse -Force 
+      }
+
 - task: DotNetCoreCLI@2
   displayName: 'Restore packages'
   inputs:
@@ -32,14 +49,40 @@ steps:
     projects: '**/*.csproj'
     arguments: '--configuration $(buildConfig) --no-restore'
 
-# Publish específico para .NET 8 isolated
+# CRÍTICO: Eliminar WorkerExtensions.csproj después del build según [1]
+- task: PowerShell@2
+  displayName: 'Delete problematic WorkerExtensions.csproj (Official hack from [1])'
+  inputs:
+    targetType: 'inline'
+    script: |
+      Write-Host "=== Aplicando fix oficial para WorkerExtensions.csproj ==="
+      
+      # Buscar y eliminar WorkerExtensions.csproj problemático según [1]
+      $workerExtensionsPath = "obj\Release\net8.0\WorkerExtensions\WorkerExtensions.csproj"
+      if (Test-Path $workerExtensionsPath) {
+          Write-Host "✓ Encontrado WorkerExtensions.csproj problemático: $workerExtensionsPath"
+          Remove-Item $workerExtensionsPath -Force
+          Write-Host "✓ WorkerExtensions.csproj eliminado exitosamente"
+      } else {
+          Write-Host "WorkerExtensions.csproj no encontrado (esto está bien)"
+      }
+      
+      # Eliminar cualquier referencia a .NET 6.0 según [1]
+      $net6Paths = Get-ChildItem -Path "obj" -Name "*net6.0*" -Recurse -ErrorAction SilentlyContinue
+      foreach ($path in $net6Paths) {
+          Write-Host "Eliminando referencia .NET 6.0: $($path.FullName)"
+          Remove-Item $path.FullName -Recurse -Force -ErrorAction SilentlyContinue
+      }
+      
+      Write-Host "=== Fix de WorkerExtensions completado ==="
+
 - task: DotNetCoreCLI@2
-  displayName: 'Publish for .NET 8 isolated'
+  displayName: 'Publish after WorkerExtensions cleanup'
   inputs:
     command: 'publish'
     projects: '**/*.csproj'
     publishWebProjects: false
-    arguments: '--configuration $(buildConfig) --output $(Build.ArtifactStagingDirectory)/publish --no-build --runtime win-x64 --self-contained false'
+    arguments: '--configuration $(buildConfig) --output $(Build.ArtifactStagingDirectory)/publish --no-build'
     zipAfterPublish: false
     modifyOutputPath: false
 
@@ -60,21 +103,3 @@ steps:
     package: '$(Build.ArtifactStagingDirectory)/function-app.zip'
     runtimeStack: 'DOTNET-ISOLATED|8.0'
     deploymentMethod: 'zipDeploy'
-
-# Configurar settings específicos para .NET 8 isolated
-- task: AzureCLI@2
-  displayName: 'Configure .NET 8 isolated settings'
-  inputs:
-    azureSubscription: '$(azureSubscription)'
-    scriptType: 'ps'
-    scriptLocation: 'inlineScript'
-    inlineScript: |
-      az functionapp config appsettings set `
-        --name $(functionAppName) `
-        --resource-group $(resourceGroup) `
-        --settings WEBSITE_RUN_FROM_PACKAGE=0 `
-                  FUNCTIONS_WORKER_PROCESS_COUNT=1 `
-                  WEBSITE_CONTENTSHARE=iothubandroid-content
-      
-      # Reiniciar para aplicar cambios
-      az functionapp restart --name $(functionAppName) --resource-group $(resourceGroup)
