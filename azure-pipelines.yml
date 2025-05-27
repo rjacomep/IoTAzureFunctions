@@ -19,20 +19,6 @@ steps:
     packageType: 'sdk'
     version: '8.0.x'
 
-# Limpiar archivos problemáticos antes de build
-- task: PowerShell@2
-  displayName: 'Clean problematic files (.NET 8 fix)'
-  inputs:
-    targetType: 'inline'
-    script: |
-      Write-Host "Limpiando archivos problemáticos de .NET 8..."
-      # Eliminar carpetas obj y bin que pueden tener referencias a .NET 6
-      if (Test-Path "obj") { Remove-Item "obj" -Recurse -Force }
-      if (Test-Path "bin") { Remove-Item "bin" -Recurse -Force }
-      
-      # Eliminar cualquier WorkerExtensions generado automáticamente
-      Get-ChildItem -Path . -Name "WorkerExtensions*" -Recurse | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
-
 - task: DotNetCoreCLI@2
   displayName: 'Restore packages'
   inputs:
@@ -46,24 +32,14 @@ steps:
     projects: '**/*.csproj'
     arguments: '--configuration $(buildConfig) --no-restore'
 
-# Limpiar archivos problemáticos después de build (fix para .NET 8)
-- task: PowerShell@2
-  displayName: 'Clean post-build (.NET 8 fix)'
-  inputs:
-    targetType: 'inline'
-    script: |
-      Write-Host "Limpiando archivos post-build problemáticos..."
-      # Eliminar WorkerExtensions.csproj problemático mencionado en [7]
-      Get-ChildItem -Path "obj" -Name "WorkerExtensions.csproj" -Recurse -ErrorAction SilentlyContinue | Remove-Item -Force
-      Get-ChildItem -Path "obj" -Name "*net6.0*" -Recurse -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force
-
+# Publish específico para .NET 8 isolated
 - task: DotNetCoreCLI@2
   displayName: 'Publish for .NET 8 isolated'
   inputs:
     command: 'publish'
     projects: '**/*.csproj'
     publishWebProjects: false
-    arguments: '--configuration $(buildConfig) --output $(Build.ArtifactStagingDirectory)/publish --no-build'
+    arguments: '--configuration $(buildConfig) --output $(Build.ArtifactStagingDirectory)/publish --no-build --runtime win-x64 --self-contained false'
     zipAfterPublish: false
     modifyOutputPath: false
 
@@ -84,3 +60,21 @@ steps:
     package: '$(Build.ArtifactStagingDirectory)/function-app.zip'
     runtimeStack: 'DOTNET-ISOLATED|8.0'
     deploymentMethod: 'zipDeploy'
+
+# Configurar settings específicos para .NET 8 isolated
+- task: AzureCLI@2
+  displayName: 'Configure .NET 8 isolated settings'
+  inputs:
+    azureSubscription: '$(azureSubscription)'
+    scriptType: 'ps'
+    scriptLocation: 'inlineScript'
+    inlineScript: |
+      az functionapp config appsettings set `
+        --name $(functionAppName) `
+        --resource-group $(resourceGroup) `
+        --settings WEBSITE_RUN_FROM_PACKAGE=0 `
+                  FUNCTIONS_WORKER_PROCESS_COUNT=1 `
+                  WEBSITE_CONTENTSHARE=iothubandroid-content
+      
+      # Reiniciar para aplicar cambios
+      az functionapp restart --name $(functionAppName) --resource-group $(resourceGroup)
