@@ -19,6 +19,20 @@ steps:
     packageType: 'sdk'
     version: '8.0.x'
 
+# Limpiar archivos problemáticos antes de build
+- task: PowerShell@2
+  displayName: 'Clean problematic files (.NET 8 fix)'
+  inputs:
+    targetType: 'inline'
+    script: |
+      Write-Host "Limpiando archivos problemáticos de .NET 8..."
+      # Eliminar carpetas obj y bin que pueden tener referencias a .NET 6
+      if (Test-Path "obj") { Remove-Item "obj" -Recurse -Force }
+      if (Test-Path "bin") { Remove-Item "bin" -Recurse -Force }
+      
+      # Eliminar cualquier WorkerExtensions generado automáticamente
+      Get-ChildItem -Path . -Name "WorkerExtensions*" -Recurse | Remove-Item -Recurse -Force -ErrorAction SilentlyContinue
+
 - task: DotNetCoreCLI@2
   displayName: 'Restore packages'
   inputs:
@@ -32,54 +46,34 @@ steps:
     projects: '**/*.csproj'
     arguments: '--configuration $(buildConfig) --no-restore'
 
-- task: DotNetCoreCLI@2
-  displayName: 'Publish project'
-  inputs:
-    command: 'publish'
-    projects: '*.csproj'
-    publishWebProjects: false
-    arguments: '--configuration $(buildConfig) --output publish_output'
-    modifyOutputPath: false
-    zipAfterPublish: false
-
-- task: ArchiveFiles@2
-  displayName: 'Archive files'
-  inputs:
-    rootFolderOrFile: '$(System.DefaultWorkingDirectory)/publish_output'
-    includeRootFolder: false
-    archiveFile: '$(System.DefaultWorkingDirectory)/build$(Build.BuildId).zip'
-    replaceExistingArchive: true
-
-# Verificar contenido antes del deploy
+# Limpiar archivos problemáticos después de build (fix para .NET 8)
 - task: PowerShell@2
-  displayName: 'Verify package contents'
+  displayName: 'Clean post-build (.NET 8 fix)'
   inputs:
     targetType: 'inline'
     script: |
-      $zipPath = "$(System.DefaultWorkingDirectory)/build$(Build.BuildId).zip"
-      Add-Type -AssemblyName System.IO.Compression.FileSystem
-      $zip = [System.IO.Compression.ZipFile]::OpenRead($zipPath)
-      
-      Write-Host "=== Contenido del ZIP ==="
-      $zip.Entries | ForEach-Object {
-          Write-Host "  - $($_.FullName)"
-      }
-      
-      # Verificar archivos críticos
-      $hostJson = $zip.Entries | Where-Object { $_.FullName -eq "host.json" }
-      if ($hostJson) {
-          Write-Host "✓ host.json encontrado"
-      } else {
-          Write-Host "❌ host.json NO encontrado - CRÍTICO"
-      }
-      
-      $zip.Dispose()
+      Write-Host "Limpiando archivos post-build problemáticos..."
+      # Eliminar WorkerExtensions.csproj problemático mencionado en [7]
+      Get-ChildItem -Path "obj" -Name "WorkerExtensions.csproj" -Recurse -ErrorAction SilentlyContinue | Remove-Item -Force
+      Get-ChildItem -Path "obj" -Name "*net6.0*" -Recurse -ErrorAction SilentlyContinue | Remove-Item -Recurse -Force
 
-- task: PublishBuildArtifacts@1
-  displayName: 'Publish build artifacts'
+- task: DotNetCoreCLI@2
+  displayName: 'Publish for .NET 8 isolated'
   inputs:
-    PathtoPublish: '$(System.DefaultWorkingDirectory)/build$(Build.BuildId).zip'
-    artifactName: 'drop'
+    command: 'publish'
+    projects: '**/*.csproj'
+    publishWebProjects: false
+    arguments: '--configuration $(buildConfig) --output $(Build.ArtifactStagingDirectory)/publish --no-build'
+    zipAfterPublish: false
+    modifyOutputPath: false
+
+- task: ArchiveFiles@2
+  displayName: 'Create deployment package'
+  inputs:
+    rootFolderOrFile: '$(Build.ArtifactStagingDirectory)/publish'
+    includeRootFolder: false
+    archiveFile: '$(Build.ArtifactStagingDirectory)/function-app.zip'
+    replaceExistingArchive: true
 
 - task: AzureFunctionApp@2
   displayName: 'Deploy Azure Function App'
@@ -87,36 +81,6 @@ steps:
     connectedServiceNameARM: '$(azureSubscription)'
     appType: 'functionApp'
     appName: '$(functionAppName)'
-    package: '$(System.DefaultWorkingDirectory)/build$(Build.BuildId).zip'
+    package: '$(Build.ArtifactStagingDirectory)/function-app.zip'
+    runtimeStack: 'DOTNET-ISOLATED|8.0'
     deploymentMethod: 'zipDeploy'
-
-# Post-deployment: Reiniciar y sincronizar
-- task: AzureCLI@2
-  displayName: 'Post-deployment: Restart and sync'
-  inputs:
-    azureSubscription: '$(azureSubscription)'
-    scriptType: 'ps'
-    scriptLocation: 'inlineScript'
-    inlineScript: |
-      Write-Host "=== Post-deployment verification ==="
-      
-      # Reiniciar Function App
-      Write-Host "Reiniciando Function App..."
-      az functionapp restart --name $(functionAppName) --resource-group $(resourceGroup)
-      
-      # Esperar estabilización
-      Write-Host "Esperando estabilización..."
-      Start-Sleep -Seconds 45
-      
-      # Sincronizar triggers
-      Write-Host "Sincronizando triggers..."
-      az functionapp deployment source sync --name $(functionAppName) --resource-group $(resourceGroup)
-      
-      # Verificar funciones
-      Write-Host "Verificando funciones desplegadas..."
-      $functions = az functionapp function list --name $(functionAppName) --resource-group $(resourceGroup) --output table
-      Write-Host $functions
-      
-      # Verificar estado del runtime
-      $hostStatus = az functionapp show --name $(functionAppName) --resource-group $(resourceGroup) --query "hostingEnvironmentProfile" -o tsv
-      Write-Host "Estado del hosting: $hostStatus"
