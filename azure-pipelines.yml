@@ -19,37 +19,41 @@ steps:
     packageType: 'sdk'
     version: '8.0.x'
 
-# Limpieza inicial con manejo de errores según [3][4]
 - task: PowerShell@2
-  displayName: 'Initial cleanup (.NET 8 migration fix)'
+  displayName: 'Initial cleanup with null checks'
   inputs:
     targetType: 'inline'
     errorActionPreference: 'stop'
-    failOnStderr: false  # Según [4], no confiar en failOnStderr
+    failOnStderr: false
     script: |
       try {
           Write-Host "=== Limpieza inicial para migración .NET 8 ==="
           
-          # Eliminar bin si existe
-          if (Test-Path "bin") { 
-              Write-Host "Eliminando carpeta bin..."
-              Remove-Item "bin" -Recurse -Force -ErrorAction SilentlyContinue
-              if ($?) { Write-Host "✓ Carpeta bin eliminada" }
+          # Verificar y eliminar bin con verificación null según [1][6]
+          $binPath = "bin"
+          if ((Test-Path $binPath) -and ($binPath -ne $null) -and ($binPath -ne "")) { 
+              Write-Host "Eliminando carpeta bin: $binPath"
+              Remove-Item $binPath -Recurse -Force -ErrorAction SilentlyContinue
+              Write-Host "✓ Carpeta bin eliminada"
+          } else {
+              Write-Host "ℹ️ Carpeta bin no existe o path es null"
           }
           
-          # Eliminar obj si existe  
-          if (Test-Path "obj") { 
-              Write-Host "Eliminando carpeta obj..."
-              Remove-Item "obj" -Recurse -Force -ErrorAction SilentlyContinue
-              if ($?) { Write-Host "✓ Carpeta obj eliminada" }
+          # Verificar y eliminar obj con verificación null según [1][6]
+          $objPath = "obj"
+          if ((Test-Path $objPath) -and ($objPath -ne $null) -and ($objPath -ne "")) { 
+              Write-Host "Eliminando carpeta obj: $objPath"
+              Remove-Item $objPath -Recurse -Force -ErrorAction SilentlyContinue
+              Write-Host "✓ Carpeta obj eliminada"
+          } else {
+              Write-Host "ℹ️ Carpeta obj no existe o path es null"
           }
           
           Write-Host "✓ Limpieza inicial completada exitosamente"
-          exit 0  # Según [1][4], usar exit 0 explícitamente
+          exit 0
           
       } catch {
           Write-Host "##vso[task.logissue type=error]Error en limpieza inicial: $($_.Exception.Message)"
-          Write-Host "##vso[task.logissue type=error]StackTrace: $($_.ScriptStackTrace)"
           exit 1
       }
 
@@ -66,54 +70,67 @@ steps:
     projects: '**/*.csproj'
     arguments: '--configuration $(buildConfig) --no-restore'
 
-# Fix de WorkerExtensions con manejo robusto de errores según [3][4]
+# Fix de WorkerExtensions con verificación completa de null según [1][2][6]
 - task: PowerShell@2
-  displayName: 'WorkerExtensions fix with proper error handling'
+  displayName: 'WorkerExtensions fix with null-safe operations'
   inputs:
     targetType: 'inline'
     errorActionPreference: 'stop'
-    failOnStderr: false  # Según [4]
+    failOnStderr: false
     script: |
       try {
-          Write-Host "=== Aplicando fix oficial para WorkerExtensions.csproj ==="
+          Write-Host "=== Fix de WorkerExtensions con verificaciones null ==="
           
-          # Definir rutas posibles para WorkerExtensions según [2]
+          # Definir rutas con verificación null según [4]
           $possiblePaths = @(
               "obj\Release\net8.0\WorkerExtensions\WorkerExtensions.csproj",
-              "obj\$(buildConfig)\net8.0\WorkerExtensions\WorkerExtensions.csproj",
-              "AzureFunctions\obj\Release\net8.0\WorkerExtensions\WorkerExtensions.csproj"
+              "obj\$(buildConfig)\net8.0\WorkerExtensions\WorkerExtensions.csproj"
           )
           
-          $foundFiles = $false
+          $filesDeleted = 0
           
           foreach ($path in $possiblePaths) {
-              if (Test-Path $path) {
+              # Verificación null completa según [1][6]
+              if (($path -ne $null) -and ($path -ne "") -and (Test-Path $path)) {
                   Write-Host "✓ Encontrado WorkerExtensions.csproj en: $path"
-                  Remove-Item $path -Force -ErrorAction SilentlyContinue
-                  if ($?) {
-                      Write-Host "✓ WorkerExtensions.csproj eliminado exitosamente"
-                      $foundFiles = $true
-                  } else {
-                      Write-Host "⚠️ No se pudo eliminar: $path"
+                  try {
+                      Remove-Item $path -Force -ErrorAction Stop
+                      Write-Host "✓ WorkerExtensions.csproj eliminado: $path"
+                      $filesDeleted++
+                  } catch {
+                      Write-Host "⚠️ No se pudo eliminar: $path - Error: $($_.Exception.Message)"
                   }
+              } else {
+                  Write-Host "ℹ️ Path no válido o no existe: $path"
               }
           }
           
-          if (-not $foundFiles) {
-              Write-Host "ℹ️ No se encontró WorkerExtensions.csproj (esto puede estar bien)"
-          }
-          
-          # Buscar y eliminar referencias a .NET 6.0 según [2]
-          $net6Items = Get-ChildItem -Path "obj" -Name "*net6.0*" -Recurse -ErrorAction SilentlyContinue
-          if ($net6Items) {
-              foreach ($item in $net6Items) {
-                  Write-Host "Eliminando referencia .NET 6.0: $($item.FullName)"
-                  Remove-Item $item.FullName -Recurse -Force -ErrorAction SilentlyContinue
+          # Buscar referencias .NET 6.0 con verificación null según [2][4]
+          $objDir = "obj"
+          if (($objDir -ne $null) -and (Test-Path $objDir)) {
+              Write-Host "Buscando referencias .NET 6.0 en: $objDir"
+              
+              $net6Items = Get-ChildItem -Path $objDir -Name "*net6.0*" -Recurse -ErrorAction SilentlyContinue
+              
+              if ($net6Items -ne $null) {
+                  foreach ($item in $net6Items) {
+                      if (($item -ne $null) -and ($item.FullName -ne $null) -and ($item.FullName -ne "")) {
+                          Write-Host "Eliminando referencia .NET 6.0: $($item.FullName)"
+                          try {
+                              Remove-Item $item.FullName -Recurse -Force -ErrorAction Stop
+                              $filesDeleted++
+                          } catch {
+                              Write-Host "⚠️ No se pudo eliminar .NET 6.0 ref: $($item.FullName)"
+                          }
+                      }
+                  }
+              } else {
+                  Write-Host "ℹ️ No se encontraron referencias .NET 6.0"
               }
           }
           
-          Write-Host "✓ Fix de WorkerExtensions completado exitosamente"
-          exit 0  # Según [1][4]
+          Write-Host "✓ Fix completado. Archivos eliminados: $filesDeleted"
+          exit 0
           
       } catch {
           Write-Host "##vso[task.logissue type=error]Error en WorkerExtensions fix: $($_.Exception.Message)"
@@ -122,7 +139,7 @@ steps:
       }
 
 - task: DotNetCoreCLI@2
-  displayName: 'Publish after WorkerExtensions cleanup'
+  displayName: 'Publish after cleanup'
   inputs:
     command: 'publish'
     projects: '**/*.csproj'
@@ -148,31 +165,3 @@ steps:
     package: '$(Build.ArtifactStagingDirectory)/function-app.zip'
     runtimeStack: 'DOTNET-ISOLATED|8.0'
     deploymentMethod: 'zipDeploy'
-
-# Configuración post-deployment según [5]
-- task: AzureCLI@2
-  displayName: 'Configure .NET 8 settings and restart'
-  inputs:
-    azureSubscription: '$(azureSubscription)'
-    scriptType: 'ps'
-    scriptLocation: 'inlineScript'
-    inlineScript: |
-      Write-Host "Configurando settings para .NET 8 isolated..."
-      
-      # Según [5], remover WEBSITE_RUN_FROM_PACKAGE puede ser necesario
-      az functionapp config appsettings delete `
-        --name $(functionAppName) `
-        --resource-group $(resourceGroup) `
-        --setting-names WEBSITE_RUN_FROM_PACKAGE
-      
-      # Configurar settings correctos para .NET 8 isolated según [5]
-      az functionapp config appsettings set `
-        --name $(functionAppName) `
-        --resource-group $(resourceGroup) `
-        --settings FUNCTIONS_WORKER_RUNTIME=dotnet-isolated `
-                  FUNCTIONS_EXTENSION_VERSION=~4
-      
-      # Reiniciar para aplicar cambios según [5]
-      az functionapp restart --name $(functionAppName) --resource-group $(resourceGroup)
-      
-      Write-Host "✓ Configuración completada"
