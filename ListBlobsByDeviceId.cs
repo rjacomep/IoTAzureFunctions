@@ -33,8 +33,7 @@ public class ListBlobsByDeviceId
 
         await foreach (BlobItem blobItem in containerClient.GetBlobsAsync(prefix: prefix))
         {
-            string blobUrl = $"{containerClient.Uri}/{blobItem.Name}";
-            blobsList.Add(blobUrl);
+            blobsList.Add(blobItem.Name);
         }
 
         var response = req.CreateResponse(HttpStatusCode.OK);
