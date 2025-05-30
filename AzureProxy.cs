@@ -8,58 +8,76 @@ using System.Net;
 
 namespace iothubandroid.Function;
 
-    public class ProxyGeoJsonFunction
-    {
-        private readonly BlobServiceClient _blobServiceClient;
+public class ProxyGeoJsonFunction
+{
+    private readonly BlobServiceClient _blobServiceClient;
 
-        public ProxyGeoJsonFunction(BlobServiceClient blobServiceClient)
+    public ProxyGeoJsonFunction(BlobServiceClient blobServiceClient)
+    {
+        _blobServiceClient = blobServiceClient;
+    }
+
+    [Function("ProxyGeoJson")]
+    public async Task<HttpResponseData> Run(
+        [HttpTrigger(AuthorizationLevel.Function, "get", "options")] HttpRequestData req)
+    {
+        // Responder a la petición OPTIONS (preflight CORS)
+        if (req.Method == HttpMethod.Options.Method)
         {
-            _blobServiceClient = blobServiceClient;
+            var optionsResponse = req.CreateResponse(HttpStatusCode.NoContent);
+            AddCorsHeaders(optionsResponse);
+            return optionsResponse;
         }
 
-        [Function("ProxyGeoJson")]
-        public async Task<HttpResponseData> Run(
-            [HttpTrigger(AuthorizationLevel.Function, "get")] HttpRequestData req)
+        var query = System.Web.HttpUtility.ParseQueryString(req.Url.Query);
+        string blobName = query["blobName"];
+
+        var response = req.CreateResponse();
+
+        AddCorsHeaders(response);  // Agregar headers CORS en todas las respuestas
+
+        if (string.IsNullOrEmpty(blobName))
         {
-            var query = System.Web.HttpUtility.ParseQueryString(req.Url.Query);
-            string blobName = query["blobName"];
+            response.StatusCode = HttpStatusCode.BadRequest;
+            await response.WriteStringAsync("Debe proveer el parámetro 'blobName'");
+            return response;
+        }
 
-            var response = req.CreateResponse();
+        string containerName = "telemetry-data"; // Cambia según tu contenedor
 
-            if (string.IsNullOrEmpty(blobName))
+        try
+        {
+            var containerClient = _blobServiceClient.GetBlobContainerClient(containerName);
+            var blobClient = containerClient.GetBlobClient(blobName);
+
+            var exists = await blobClient.ExistsAsync();
+            if (!exists)
             {
-                response.StatusCode = HttpStatusCode.BadRequest;
-                await response.WriteStringAsync("Debe proveer el parámetro 'blobName'");
+                response.StatusCode = HttpStatusCode.NotFound;
+                await response.WriteStringAsync("Archivo no encontrado");
                 return response;
             }
 
-            string containerName = "telemetry-data"; // Cambia según tu contenedor
+            var download = await blobClient.DownloadStreamingAsync();
 
-            try
-            {
-                var containerClient = _blobServiceClient.GetBlobContainerClient(containerName);
-                var blobClient = containerClient.GetBlobClient(blobName);
+            response.Headers.Add("Content-Type", "application/json");
+            await download.Value.Content.CopyToAsync(response.Body);
 
-                var exists = await blobClient.ExistsAsync();
-                if (!exists)
-                {
-                    response.StatusCode = HttpStatusCode.NotFound;
-                    await response.WriteStringAsync("Archivo no encontrado");
-                    return response;
-                }
-
-                var download = await blobClient.DownloadStreamingAsync();
-
-                response.Headers.Add("Content-Type", "application/json");
-                await download.Value.Content.CopyToAsync(response.Body);
-
-                return response;
-            }
-            catch (RequestFailedException ex)
-            {
-                response.StatusCode = HttpStatusCode.InternalServerError;
-                await response.WriteStringAsync($"Error accediendo al blob: {ex.Message}");
-                return response;
-            }
+            return response;
+        }
+        catch (RequestFailedException ex)
+        {
+            response.StatusCode = HttpStatusCode.InternalServerError;
+            await response.WriteStringAsync($"Error accediendo al blob: {ex.Message}");
+            return response;
         }
     }
+
+    private void AddCorsHeaders(HttpResponseData response)
+    {
+        response.Headers.Add("Access-Control-Allow-Origin", "*");
+        response.Headers.Add("Access-Control-Allow-Methods", "GET, OPTIONS");
+        response.Headers.Add("Access-Control-Allow-Headers", "Content-Type");
+    }
+}
+
