@@ -23,7 +23,12 @@ public class ListBlobsByDeviceId
         [HttpTrigger(AuthorizationLevel.Function, "get", Route = "listblobs/{deviceId}")] HttpRequestData req,
         string deviceId)
     {
-        string connectionString = Environment.GetEnvironmentVariable("AzureWebJobsStorage");
+        string? connectionString = Environment.GetEnvironmentVariable("AzureWebJobsStorage");
+if (string.IsNullOrEmpty(connectionString))
+{
+    throw new InvalidOperationException("No se encontró la variable de entorno 'AzureWebJobsStorage'");
+}
+
         string containerName = "telemetry-data";
 
         var containerClient = new BlobContainerClient(connectionString, containerName);
