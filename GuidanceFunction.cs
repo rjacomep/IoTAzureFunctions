@@ -29,21 +29,25 @@ public class NavigationGuideFunction
         var data = JsonDocument.Parse(requestBody);
 
         if (!data.RootElement.TryGetProperty("latitude", out var latEl) ||
-            !data.RootElement.TryGetProperty("longitude", out var lonEl))
+            !data.RootElement.TryGetProperty("longitude", out var lonEl) ||
+            !data.RootElement.TryGetProperty("blobName", out var blobNameEl))
         {
-            _logger.LogWarning("❌ Coordenadas no proporcionadas correctamente.");
+            _logger.LogWarning("❌ Faltan parámetros: latitude, longitude o blobName.");
             var badResponse = req.CreateResponse(HttpStatusCode.BadRequest);
-            await badResponse.WriteStringAsync("Debe incluir 'latitude' y 'longitude' en el cuerpo.");
+            await badResponse.WriteStringAsync("Debe incluir 'latitude', 'longitude' y 'blobName' en el cuerpo.");
             return badResponse;
         }
 
         double userLat = latEl.GetDouble();
         double userLon = lonEl.GetDouble();
-        _logger.LogInformation($"📡 Posición recibida: lat={userLat}, lon={userLon}");
+        string blobName = blobNameEl.GetString() ?? "";
+
+        _logger.LogInformation($"📡 Posición: lat={userLat}, lon={userLon}");
+        _logger.LogInformation($"📄 Archivo GeoJSON: {blobName}");
 
         // Leer GeoJSON desde Blob Storage
         var containerClient = _blobServiceClient.GetBlobContainerClient("telemetry-data");
-        var blobClient = containerClient.GetBlobClient("merged_all_20250409054216-ruta.geojson");
+        var blobClient = containerClient.GetBlobClient(blobName);
 
         if (!await blobClient.ExistsAsync())
         {
