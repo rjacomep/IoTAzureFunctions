@@ -10,13 +10,11 @@ public class NavigationGuideFunction
 {
     private readonly ILogger _logger;
     private readonly BlobServiceClient _blobServiceClient;
-    private readonly HttpClient _httpClient;
 
     public NavigationGuideFunction(ILoggerFactory loggerFactory)
     {
         _logger = loggerFactory.CreateLogger<NavigationGuideFunction>();
         _blobServiceClient = new BlobServiceClient(Environment.GetEnvironmentVariable("AzureWebJobsStorage"));
-        _httpClient = new HttpClient();
     }
 
     [Function("NavigationGuideFunction")]
@@ -25,110 +23,109 @@ public class NavigationGuideFunction
     {
         _logger.LogInformation("📍 NavigationGuideFunction triggered");
 
-        string requestBody = await new StreamReader(req.Body).ReadToEndAsync();
-        var data = JsonDocument.Parse(requestBody);
-
-        if (!data.RootElement.TryGetProperty("latitude", out var latEl) ||
-            !data.RootElement.TryGetProperty("longitude", out var lonEl) ||
-            !data.RootElement.TryGetProperty("blobName", out var blobNameEl))
+        try
         {
-            _logger.LogWarning("❌ Faltan parámetros: latitude, longitude o blobName.");
-            var badResponse = req.CreateResponse(HttpStatusCode.BadRequest);
-            await badResponse.WriteStringAsync("Debe incluir 'latitude', 'longitude' y 'blobName' en el cuerpo.");
-            return badResponse;
-        }
+            string requestBody = await new StreamReader(req.Body).ReadToEndAsync();
+            _logger.LogInformation($"📨 Cuerpo recibido: {requestBody}");
 
-        double userLat = latEl.GetDouble();
-        double userLon = lonEl.GetDouble();
-        string blobName = blobNameEl.GetString() ?? "";
+            var data = JsonDocument.Parse(requestBody);
 
-        _logger.LogInformation($"📡 Posición: lat={userLat}, lon={userLon}");
-        _logger.LogInformation($"📄 Archivo GeoJSON: {blobName}");
-
-        // Leer GeoJSON desde Blob Storage
-        var containerClient = _blobServiceClient.GetBlobContainerClient("telemetry-data");
-        var blobClient = containerClient.GetBlobClient(blobName);
-
-        if (!await blobClient.ExistsAsync())
-        {
-            var notFound = req.CreateResponse(HttpStatusCode.NotFound);
-            await notFound.WriteStringAsync("El archivo GeoJSON no fue encontrado.");
-            return notFound;
-        }
-
-        using var geoStream = await blobClient.OpenReadAsync();
-        var geoDoc = JsonDocument.Parse(geoStream);
-
-        // Buscar zona más cercana
-        double minDistance = double.MaxValue;
-        string closestZone = "";
-        foreach (var feature in geoDoc.RootElement.GetProperty("features").EnumerateArray())
-        {
-            var props = feature.GetProperty("properties");
-            var geometry = feature.GetProperty("geometry");
-            if (geometry.GetProperty("type").GetString() != "Point") continue;
-
-            var coords = geometry.GetProperty("coordinates").EnumerateArray().ToArray();
-            double pointLon = coords[0].GetDouble();
-            double pointLat = coords[1].GetDouble();
-            double distance = Haversine(userLat, userLon, pointLat, pointLon);
-
-            if (distance < minDistance)
+            if (!data.RootElement.TryGetProperty("latitude", out var latEl) ||
+                !data.RootElement.TryGetProperty("longitude", out var lonEl) ||
+                !data.RootElement.TryGetProperty("blobName", out var blobNameEl))
             {
-                minDistance = distance;
-                closestZone = props.TryGetProperty("zoneType", out var z) ? z.GetString() ?? "" : "";
+                _logger.LogWarning("❌ Faltan parámetros: latitude, longitude o blobName.");
+                var badResponse = req.CreateResponse(HttpStatusCode.BadRequest);
+                await badResponse.WriteStringAsync("Debe incluir 'latitude', 'longitude' y 'blobName' en el cuerpo.");
+                return badResponse;
             }
+
+            double userLat = latEl.GetDouble();
+            double userLon = lonEl.GetDouble();
+            string blobName = blobNameEl.GetString() ?? "";
+
+            _logger.LogInformation($"Posición recibida: lat={userLat}, lon={userLon}");
+            _logger.LogInformation($"Nombre de blob recibido: {blobName}");
+
+            // Obtener el cliente del contenedor y del blob
+            string containerName = blobName.StartsWith("customroute_") ? "geojsonfiles" : "telemetry-data";
+            _logger.LogInformation($"📦 Usando contenedor: {containerName}");
+            var containerClient = _blobServiceClient.GetBlobContainerClient(containerName);
+
+            var blobClient = containerClient.GetBlobClient(blobName);
+
+            _logger.LogInformation($"🔍 Verificando existencia del blob: {blobName}");
+            if (!await blobClient.ExistsAsync())
+            {
+                _logger.LogWarning($"Blob '{blobName}' no encontrado en el contenedor.");
+                var notFound = req.CreateResponse(HttpStatusCode.NotFound);
+                await notFound.WriteStringAsync("El archivo GeoJSON no fue encontrado.");
+                return notFound;
+            }
+
+            _logger.LogInformation($"✅ Blob '{blobName}' encontrado. Iniciando lectura...");
+
+            using var geoStream = await blobClient.OpenReadAsync();
+            var geoDoc = JsonDocument.Parse(geoStream);
+
+            double minDistance = double.MaxValue;
+            string closestZone = "";
+            int totalFeatures = 0;
+
+            foreach (var feature in geoDoc.RootElement.GetProperty("features").EnumerateArray())
+            {
+                totalFeatures++;
+                var props = feature.GetProperty("properties");
+                var geometry = feature.GetProperty("geometry");
+                if (geometry.GetProperty("type").GetString() != "Point") continue;
+
+                var coords = geometry.GetProperty("coordinates").EnumerateArray().ToArray();
+                double pointLon = coords[0].GetDouble();
+                double pointLat = coords[1].GetDouble();
+                double distance = Haversine(userLat, userLon, pointLat, pointLon);
+
+                if (distance < minDistance)
+                {
+                    minDistance = distance;
+                    closestZone = props.TryGetProperty("zoneType", out var z) ? z.GetString() ?? "" : "";
+                }
+            }
+
+            _logger.LogInformation($"📊 Total de features analizadas: {totalFeatures}");
+            _logger.LogInformation($"📏 Distancia mínima encontrada: {minDistance:F4} km");
+            _logger.LogInformation($"📌 Zona más cercana: {closestZone}");
+
+            string zoneDesc = closestZone switch
+            {
+                "hallway" => "un pasillo",
+                "rest_area" => "una zona de descanso",
+                "stairs" => "unas escaleras",
+                _ => "una zona desconocida"
+            };
+
+            var texto = (minDistance > 0.05)
+                ? "No se detecta una zona cercana en la ruta."
+                : $"Estás cerca de {zoneDesc}. Sigue recto por 15 metros.";
+
+            _logger.LogInformation($"🗣 Texto generado para respuesta: {texto}");
+
+            var result = new { texto = texto };
+            var jsonResponse = req.CreateResponse(HttpStatusCode.OK);
+            jsonResponse.Headers.Add("Content-Type", "application/json");
+            await jsonResponse.WriteStringAsync(JsonSerializer.Serialize(result));
+
+            _logger.LogInformation("✅ Respuesta enviada correctamente.");
+            return jsonResponse;
         }
-
-        string zoneDesc = closestZone switch
+        catch (Exception ex)
         {
-            "hallway" => "un pasillo",
-            "rest_area" => "una zona de descanso",
-            "stairs" => "unas escaleras",
-            _ => "una zona desconocida"
-        };
+            _logger.LogError($"Error inesperado: {ex.Message}");
+            _logger.LogError(ex.ToString());
 
-        var texto = (minDistance > 0.05)
-            ? "No se detecta una zona cercana en la ruta."
-            : $"Estás cerca de {zoneDesc}. Sigue recto por 15 metros.";
-
-        _logger.LogInformation($"🗣 Texto para sintetizar: {texto}");
-
-        // Azure Speech API
-        var speechKey = Environment.GetEnvironmentVariable("SPEECH_KEY");
-        var region = "eastus";
-        var endpoint = $"https://{region}.tts.speech.microsoft.com/cognitiveservices/v1";
-
-        var ssml = $@"<speak version='1.0' xml:lang='es-ES'>
-                        <voice xml:lang='es-ES' xml:gender='Male' name='es-ES-AlvaroNeural'>
-                            {System.Security.SecurityElement.Escape(texto)}
-                        </voice>
-                    </speak>";
-
-        using var content = new StringContent(ssml, Encoding.UTF8, "application/ssml+xml");
-        _httpClient.DefaultRequestHeaders.Clear();
-        _httpClient.DefaultRequestHeaders.Add("Ocp-Apim-Subscription-Key", speechKey);
-        _httpClient.DefaultRequestHeaders.Add("X-Microsoft-OutputFormat", "audio-16khz-32kbitrate-mono-mp3");
-        _httpClient.DefaultRequestHeaders.Add("User-Agent", "AzureFunction-Navigation");
-
-        var ttsResponse = await _httpClient.PostAsync(endpoint, content);
-
-        if (!ttsResponse.IsSuccessStatusCode)
-        {
-            string err = await ttsResponse.Content.ReadAsStringAsync();
-            _logger.LogError("❌ Speech API error: {StatusCode} - {Message}", ttsResponse.StatusCode, err);
-            var errorResponse = req.CreateResponse(ttsResponse.StatusCode);
-            await errorResponse.WriteStringAsync("Error al generar audio: " + err);
+            var errorResponse = req.CreateResponse(HttpStatusCode.InternalServerError);
+            await errorResponse.WriteStringAsync("Ocurrió un error al procesar la solicitud.");
             return errorResponse;
         }
-
-        var audioBytes = await ttsResponse.Content.ReadAsByteArrayAsync();
-        var audioResponse = req.CreateResponse(HttpStatusCode.OK);
-        audioResponse.Headers.Add("Content-Type", "audio/mpeg");
-        await audioResponse.Body.WriteAsync(audioBytes, 0, audioBytes.Length);
-        _logger.LogInformation("✅ Audio generado correctamente.");
-
-        return audioResponse;
     }
 
     private static double Haversine(double lat1, double lon1, double lat2, double lon2)
@@ -144,8 +141,6 @@ public class NavigationGuideFunction
                    Math.Sin(Δλ / 2) * Math.Sin(Δλ / 2);
         double c = 2 * Math.Atan2(Math.Sqrt(a), Math.Sqrt(1 - a));
 
-        return R * c / 1000; // km
+        return R * c / 1000; // kilómetros
     }
 }
-
-

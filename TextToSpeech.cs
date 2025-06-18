@@ -1,7 +1,3 @@
-// Azure Function en C# para Text-to-Speech con Azure Cognitive Services
-
-// Azure Function en C# (Isolated Worker) para Text-to-Speech con Azure Cognitive Services
-
 using System.Net;
 using System.Text;
 using Microsoft.Azure.Functions.Worker;
@@ -21,24 +17,44 @@ public class TTSFunction
     }
 
     [Function("TTSFunction")]
-    public async Task<HttpResponseData> Run([HttpTrigger(AuthorizationLevel.Function, "post")] HttpRequestData req)
+    public async Task<HttpResponseData> Run([HttpTrigger(AuthorizationLevel.Function, "get", "post")] HttpRequestData req)
     {
-        _logger.LogInformation("TTSFunction (Isolated) received a request.");
+        _logger.LogInformation("TTSFunction recibió una solicitud.");
 
-        using var reader = new StreamReader(req.Body);
-        var requestBody = await reader.ReadToEndAsync();
-        var json = JsonDocument.Parse(requestBody);
+        string? texto = null;
 
-        if (!json.RootElement.TryGetProperty("texto", out var textoElement) || string.IsNullOrWhiteSpace(textoElement.GetString()))
+        if (req.Method == "GET")
+        {
+            var query = System.Web.HttpUtility.ParseQueryString(req.Url.Query);
+            texto = query["texto"];
+        }
+        else if (req.Method == "POST")
+        {
+            using var reader = new StreamReader(req.Body);
+            var requestBody = await reader.ReadToEndAsync();
+            try
+            {
+                var json = JsonDocument.Parse(requestBody);
+                if (json.RootElement.TryGetProperty("texto", out var textoElement))
+                {
+                    texto = textoElement.GetString();
+                }
+            }
+            catch
+            {
+                _logger.LogWarning("Error al parsear el cuerpo JSON.");
+            }
+        }
+
+        if (string.IsNullOrWhiteSpace(texto))
         {
             var badResponse = req.CreateResponse(HttpStatusCode.BadRequest);
-            await badResponse.WriteStringAsync("Por favor proporciona un texto válido en el cuerpo de la solicitud.");
+            await badResponse.WriteStringAsync("Debes proporcionar el parámetro 'texto' por query o JSON.");
             return badResponse;
         }
 
-        var texto = textoElement.GetString();
-        var region = "eastus";
         var subscriptionKey = Environment.GetEnvironmentVariable("SPEECH_KEY");
+        var region = "eastus";
         var endpoint = $"https://{region}.tts.speech.microsoft.com/cognitiveservices/v1";
 
         var ssml = $@"<speak version='1.0' xml:lang='es-ES'>
@@ -47,12 +63,12 @@ public class TTSFunction
                         </voice>
                     </speak>";
 
-        using var content = new StringContent(ssml, Encoding.UTF8, "application/ssml+xml");
         _httpClient.DefaultRequestHeaders.Clear();
         _httpClient.DefaultRequestHeaders.Add("Ocp-Apim-Subscription-Key", subscriptionKey);
         _httpClient.DefaultRequestHeaders.Add("X-Microsoft-OutputFormat", "audio-16khz-32kbitrate-mono-mp3");
         _httpClient.DefaultRequestHeaders.Add("User-Agent", "AzureFunctionTTS");
 
+        using var content = new StringContent(ssml, Encoding.UTF8, "application/ssml+xml");
         var responseFromAzure = await _httpClient.PostAsync(endpoint, content);
 
         if (!responseFromAzure.IsSuccessStatusCode)
@@ -66,8 +82,10 @@ public class TTSFunction
         var audioBytes = await responseFromAzure.Content.ReadAsByteArrayAsync();
         var response = req.CreateResponse(HttpStatusCode.OK);
         response.Headers.Add("Content-Type", "audio/mpeg");
-        await response.Body.WriteAsync(audioBytes, 0, audioBytes.Length);
+        await response.Body.WriteAsync(audioBytes);
 
+        _logger.LogInformation("Audio generado correctamente.");
         return response;
     }
 }
+
